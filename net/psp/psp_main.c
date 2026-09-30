@@ -214,7 +214,8 @@ unsigned int psp_key_size(u32 version)
 EXPORT_SYMBOL(psp_key_size);
 
 static void psp_write_headers(struct net *net, struct sk_buff *skb, __be32 spi,
-			      u8 ver, unsigned int udp_len, __be16 sport)
+			      u8 ver, u8 nexthdr, unsigned int udp_len,
+			      __be16 sport)
 {
 	struct udphdr *uh = udp_hdr(skb);
 	struct psphdr *psph = (struct psphdr *)(uh + 1);
@@ -236,10 +237,11 @@ static void psp_write_headers(struct net *net, struct sk_buff *skb, __be32 spi,
 	 * This field is subject to reshuffling, thanks to
 	 * sk_rethink_txhash() calls in various TCP functions.
 	 *
-	 * Instead, use sk->sk_hash which is constant through
+	 * Instead, use sk->sk_hash for TCP which is constant through
 	 * the whole flow duration.
 	 */
-	if (likely(sk)) {
+	if (likely(sk && nexthdr == IPPROTO_TCP &&
+		   (!sk_fullsock(sk) || sk_is_tcp(sk)))) {
 		u32 hash = sk->sk_hash;
 		int min, max;
 
@@ -261,7 +263,7 @@ static void psp_write_headers(struct net *net, struct sk_buff *skb, __be32 spi,
 	uh->check = 0;
 	udp_set_len(uh, udp_len);
 
-	psph->nexthdr = IPPROTO_TCP;
+	psph->nexthdr = nexthdr;
 	psph->hdrlen = PSP_HDRLEN_NOOPT;
 	psph->crypt_offset = 0;
 	psph->verfl = FIELD_PREP(PSPHDR_VERFL_VERSION, ver) |
@@ -270,26 +272,34 @@ static void psp_write_headers(struct net *net, struct sk_buff *skb, __be32 spi,
 	memset(&psph->iv, 0, sizeof(psph->iv));
 }
 
-/* UDP+PSP goes in at the transport header, the protocol of the fixed IP
- * header becomes UDP, and TCP the PSP next header: TCP must directly follow
- * the fixed header. It doesn't with IPv6 extension headers, whose last one
- * holds the L4 protocol.
+/* UDP+PSP goes in at the transport header, the protocol of the IP header
+ * becomes UDP, and the PSP next header takes the protocol it had. The
+ * transport header must directly follow the IP header: IPv4 options are fine,
+ * IPv6 extension headers aren't.
  */
 static bool psp_dev_encap_ok(const struct sk_buff *skb)
 {
 	u32 network_len = skb_network_header_len(skb);
 
+	/* inner headers already set up */
+	if (skb->encapsulation)
+		return false;
+	/* fragments not supported for transport mode */
 	if (skb->protocol == htons(ETH_P_IP))
-		return ip_hdr(skb)->protocol == IPPROTO_TCP &&
-		       network_len == ip_hdrlen(skb);
+		return network_len == ip_hdrlen(skb) &&
+		       !ip_is_fragment(ip_hdr(skb));
 	if (skb->protocol == htons(ETH_P_IPV6))
-		return ipv6_hdr(skb)->nexthdr == IPPROTO_TCP &&
+		return !ipv6_ext_hdr(ipv6_hdr(skb)->nexthdr) &&
 		       network_len == sizeof(struct ipv6hdr);
 	return false;
 }
 
-/* Encapsulate a TCP packet with PSP by adding the UDP+PSP headers and filling
- * them in.
+/* Encapsulate a packet with PSP by adding the UDP+PSP headers and filling
+ * them in. The PSP next header is taken from the IP header: packets with
+ * IPv6 extension headers, or whose transport header isn't right after the IP
+ * header, are refused, as are IP fragments, packets already encapsulated
+ * for a tunnel, and packets with a checksum to complete for a protocol other
+ * than TCP or UDP.
  */
 bool psp_dev_encapsulate(struct net *net, struct sk_buff *skb, __be32 spi,
 			 u8 ver, __be16 sport)
@@ -297,9 +307,29 @@ bool psp_dev_encapsulate(struct net *net, struct sk_buff *skb, __be32 spi,
 	u32 network_len = skb_network_header_len(skb);
 	u32 ethr_len = skb_mac_header_len(skb);
 	u32 bufflen = ethr_len + network_len;
+	u8 nexthdr;
 
 	if (!psp_dev_encap_ok(skb))
 		return false;
+
+	if (skb->protocol == htons(ETH_P_IP))
+		nexthdr = ip_hdr(skb)->protocol;
+	else
+		nexthdr = ipv6_hdr(skb)->nexthdr;
+
+	/* Devices complete only a TCP or UDP checksum behind the PSP header.
+	 * Software GSO of a tunnel with an outer checksum, e.g. GRE, leaves
+	 * the segments here with encapsulation cleared and CHECKSUM_PARTIAL
+	 * at the tunnel header.
+	 */
+	if (skb->ip_summed == CHECKSUM_PARTIAL &&
+	    nexthdr != IPPROTO_TCP && nexthdr != IPPROTO_UDP)
+		return false;
+
+	/* udp_flow_src_port() may need to hash the flow: do it on the
+	 * original headers, before they are moved and rewritten
+	 */
+	skb_get_hash(skb);
 
 	if (skb_cow_head(skb, PSP_ENCAP_HLEN))
 		return false;
@@ -321,11 +351,11 @@ bool psp_dev_encapsulate(struct net *net, struct sk_buff *skb, __be32 spi,
 		be16_add_cpu(&ipv6_hdr(skb)->payload_len, PSP_ENCAP_HLEN);
 	}
 
-	skb_set_inner_ipproto(skb, IPPROTO_TCP);
+	skb_set_inner_ipproto(skb, nexthdr);
 	skb_set_inner_transport_header(skb, skb_transport_offset(skb) +
 						    PSP_ENCAP_HLEN);
 	skb->encapsulation = 1;
-	psp_write_headers(net, skb, spi, ver,
+	psp_write_headers(net, skb, spi, ver, nexthdr,
 			  skb->len - skb_transport_offset(skb), sport);
 
 	return true;
