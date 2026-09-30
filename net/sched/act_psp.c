@@ -391,6 +391,16 @@ nla_put_failure:
 	return -1;
 }
 
+static void tcf_psp_stats_update(struct tc_action *a, u64 bytes, u64 packets,
+				 u64 drops, u64 lastuse, bool hw)
+{
+	struct tcf_psp *p = to_psp(a);
+	struct tcf_t *tm = &p->tcf_tm;
+
+	tcf_action_update_stats(a, bytes, packets, drops, hw);
+	tm->lastuse = max_t(u64, tm->lastuse, lastuse);
+}
+
 static void tcf_psp_offload_destructor(void *priv)
 {
 	psp_assoc_put(priv);
@@ -441,6 +451,7 @@ static struct tc_action_ops act_psp_ops = {
 	.dump		=	tcf_psp_dump,
 	.init		=	tcf_psp_init,
 	.cleanup	=	tcf_psp_cleanup,
+	.stats_update	=	tcf_psp_stats_update,
 	.offload_act_setup =	tcf_psp_offload_act_setup,
 	.size		=	sizeof(struct tcf_psp),
 };
