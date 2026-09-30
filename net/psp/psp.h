@@ -24,6 +24,9 @@ void psp_nl_notify_disassoc(struct psp_dev *psd, struct net *net);
 struct psp_assoc *psp_assoc_create(struct psp_dev *psd);
 struct psp_dev *psp_dev_get_for_sock(struct sock *sk);
 void psp_dev_tx_key_del(struct psp_dev *psd, struct psp_assoc *pas);
+int psp_assoc_set_tx(struct psp_dev *psd, struct psp_assoc *pas,
+		     struct psp_key_parsed *key,
+		     struct netlink_ext_ack *extack);
 int psp_sock_assoc_set_rx(struct sock *sk, struct psp_assoc *pas,
 			  struct psp_key_parsed *key,
 			  struct netlink_ext_ack *extack);

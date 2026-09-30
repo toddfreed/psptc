@@ -185,9 +185,18 @@ exit_unlock:
 	return err;
 }
 
-static int psp_assoc_set_tx(struct psp_dev *psd, struct psp_assoc *pas,
-			    struct psp_key_parsed *key,
-			    struct netlink_ext_ack *extack)
+/**
+ * psp_assoc_set_tx() - install a Tx key for an association
+ * @psd:	PSP device, must be locked
+ * @pas:	association, must belong to @psd and not have a Tx key yet
+ * @key:	Tx SPI and key
+ * @extack:	netlink extended ack
+ *
+ * Return: 0 on success, negative errno otherwise.
+ */
+int psp_assoc_set_tx(struct psp_dev *psd, struct psp_assoc *pas,
+		     struct psp_key_parsed *key,
+		     struct netlink_ext_ack *extack)
 {
 	int err;
 
