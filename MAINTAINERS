@@ -22533,8 +22533,11 @@ F:	Documentation/netlink/specs/psp.yaml
 F:	Documentation/networking/psp.rst
 F:	include/net/psp/
 F:	include/net/psp.h
+F:	include/net/tc_act/tc_psp.h
 F:	include/uapi/linux/psp.h
+F:	include/uapi/linux/tc_act/tc_psp.h
 F:	net/psp/
+F:	net/sched/act_psp.c
 K:	struct\ psp(_assoc|_dev|hdr)\b
 
 PSTORE FILESYSTEM

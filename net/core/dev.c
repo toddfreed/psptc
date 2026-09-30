@@ -4154,13 +4154,22 @@ static struct sk_buff *sk_validate_xmit_skb(struct sk_buff *skb,
 	sk_validate = NULL;
 	if (sk) {
 		if (sk_fullsock(sk))
-			sk_validate = sk->sk_validate_xmit_skb;
+			sk_validate = READ_ONCE(sk->sk_validate_xmit_skb);
 		else if (sk_is_inet(sk) && sk->sk_state == TCP_TIME_WAIT)
 			sk_validate = inet_twsk(sk)->tw_validate_xmit_skb;
 	}
 
 	if (sk_validate) {
-		skb = sk_validate(sk, dev, skb);
+		/* act_psp doesn't give an association to the packets of a
+		 * socket with its own offload, but the socket can gain one
+		 * while such a packet is queued
+		 */
+		if (unlikely(skb_psp_md(skb))) {
+			kfree_skb_reason(skb, SKB_DROP_REASON_PSP_OUTPUT);
+			skb = NULL;
+		} else {
+			skb = sk_validate(sk, dev, skb);
+		}
 	} else if (unlikely(skb_psp_md(skb))) {
 		int psp = psp_xmit_md(skb, dev);
 
