@@ -2908,6 +2908,25 @@ attribute-sets:
         byte-order: big-endian
         enum: flower-key-ctrl-flags
         enum-as-flags: true
+      -
+        name: key-psp-spi
+        type: u32
+        byte-order: big-endian
+      -
+        name: key-psp-spi-mask
+        type: u32
+        byte-order: big-endian
+      -
+        name: key-psp-version
+        type: u8
+        checks:
+          max: 15
+      -
+        name: key-psp-dev
+        type: u32
+        checks:
+          min: 1
+          max: 65535
   -
     name: flower-key-enc-opts-attrs
     name-prefix: tca-flower-key-enc-opts-

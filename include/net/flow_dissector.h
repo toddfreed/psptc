@@ -339,6 +339,23 @@ struct flow_dissector_key_cfm {
 	u8	opcode;
 };
 
+/**
+ * struct flow_dissector_key_psp - PSP Rx state of a decrypted packet
+ * @spi: SPI of the PSP association the packet was decrypted with
+ * @dev_id: ID of the PSP device which decrypted the packet
+ * @version: PSP version (enum psp_version) the packet was decrypted with
+ * @present: packet was decrypted by a PSP device
+ *
+ * Taken from the PSP Rx state the device attached to the skb, not from the
+ * packet, which no longer carries the PSP header.
+ */
+struct flow_dissector_key_psp {
+	__be32	spi;
+	u16	dev_id;
+	u8	version;
+	u8	present;
+};
+
 #define FLOW_DIS_CFM_MDL_MASK GENMASK(7, 5)
 #define FLOW_DIS_CFM_MDL_MAX 7
 
@@ -376,6 +393,7 @@ enum flow_dissector_key_id {
 	FLOW_DISSECTOR_KEY_L2TPV3, /* struct flow_dissector_key_l2tpv3 */
 	FLOW_DISSECTOR_KEY_CFM, /* struct flow_dissector_key_cfm */
 	FLOW_DISSECTOR_KEY_IPSEC, /* struct flow_dissector_key_ipsec */
+	FLOW_DISSECTOR_KEY_PSP, /* struct flow_dissector_key_psp */
 
 	FLOW_DISSECTOR_KEY_MAX,
 };
