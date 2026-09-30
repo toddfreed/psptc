@@ -388,6 +388,16 @@ static size_t tcf_psp_get_fill_size(const struct tc_action *act)
 		+ nla_total_size(sizeof(u32)); /* TCA_PSP_ASSOC_ID */
 }
 
+static void tcf_psp_stats_update(struct tc_action *a, u64 bytes, u64 packets,
+				 u64 drops, u64 lastuse, bool hw)
+{
+	struct tcf_psp *p = to_psp(a);
+	struct tcf_t *tm = &p->tcf_tm;
+
+	tcf_action_update_stats(a, bytes, packets, drops, hw);
+	tm->lastuse = max_t(u64, tm->lastuse, lastuse);
+}
+
 static void tcf_psp_offload_destructor(void *priv)
 {
 	psp_assoc_put(priv);
@@ -439,6 +449,7 @@ static struct tc_action_ops act_psp_ops = {
 	.init		=	tcf_psp_init,
 	.cleanup	=	tcf_psp_cleanup,
 	.get_fill_size	=	tcf_psp_get_fill_size,
+	.stats_update	=	tcf_psp_stats_update,
 	.offload_act_setup =	tcf_psp_offload_act_setup,
 	.size		=	sizeof(struct tcf_psp),
 };
