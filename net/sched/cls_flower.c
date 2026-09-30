@@ -81,6 +81,7 @@ struct fl_flow_key {
 	struct flow_dissector_key_l2tpv3 l2tpv3;
 	struct flow_dissector_key_ipsec ipsec;
 	struct flow_dissector_key_cfm cfm;
+	struct flow_dissector_key_psp psp;
 } __aligned(BITS_PER_LONG / 8); /* Ensure that we can do comparisons as longs. */
 
 struct fl_flow_mask_range {
@@ -343,6 +344,7 @@ TC_INDIRECT_SCOPE int fl_classify(struct sk_buff *skb,
 				    ARRAY_SIZE(fl_ct_info_to_flower_map),
 				    post_ct, zone);
 		skb_flow_dissect_hash(skb, &mask->dissector, &skb_key);
+		skb_flow_dissect_psp(skb, &mask->dissector, &skb_key);
 		skb_flow_dissect(skb, &mask->dissector, &skb_key,
 				 FLOW_DISSECTOR_F_STOP_BEFORE_ENCAP);
 
@@ -633,6 +635,11 @@ static void *fl_get(struct tcf_proto *tp, u32 handle)
 	return __fl_get(head, handle);
 }
 
+/* SKB_EXT_PSP holds the PSP device ID in 16 bits */
+static const struct netlink_range_validation fl_psp_dev_range = {
+	.max = U16_MAX,
+};
+
 static const struct nla_policy fl_policy[TCA_FLOWER_MAX + 1] = {
 	[TCA_FLOWER_UNSPEC]		= { .strict_start_type =
 						TCA_FLOWER_L2_MISS },
@@ -745,6 +752,12 @@ static const struct nla_policy fl_policy[TCA_FLOWER_MAX + 1] = {
 	[TCA_FLOWER_KEY_SPI]		= { .type = NLA_U32 },
 	[TCA_FLOWER_KEY_SPI_MASK]	= { .type = NLA_U32 },
 	[TCA_FLOWER_L2_MISS]		= NLA_POLICY_MAX(NLA_U8, 1),
+	[TCA_FLOWER_KEY_PSP_SPI]	= { .type = NLA_BE32 },
+	[TCA_FLOWER_KEY_PSP_SPI_MASK]	= { .type = NLA_BE32 },
+	/* the version field of the PSP header has 4 bits */
+	[TCA_FLOWER_KEY_PSP_VERSION]	= NLA_POLICY_MAX(NLA_U8, 15),
+	[TCA_FLOWER_KEY_PSP_DEV]	= NLA_POLICY_FULL_RANGE(NLA_U32,
+							&fl_psp_dev_range),
 	[TCA_FLOWER_KEY_CFM]		= { .type = NLA_NESTED },
 	[TCA_FLOWER_KEY_ENC_FLAGS]	= NLA_POLICY_MASK(NLA_BE32,
 							  TCA_FLOWER_KEY_ENC_FLAGS_POLICY_MASK),
@@ -2077,6 +2090,33 @@ static int fl_set_key(struct net *net, struct nlattr *tca_opts,
 			return ret;
 	}
 
+	if (tb[TCA_FLOWER_KEY_PSP_SPI_MASK] && !tb[TCA_FLOWER_KEY_PSP_SPI]) {
+		NL_SET_ERR_ATTR_MISS(extack, tca_opts, TCA_FLOWER_KEY_PSP_SPI);
+		return -EINVAL;
+	}
+	if (tb[TCA_FLOWER_KEY_PSP_SPI] || tb[TCA_FLOWER_KEY_PSP_VERSION] ||
+	    tb[TCA_FLOWER_KEY_PSP_DEV]) {
+		if (!IS_ENABLED(CONFIG_INET_PSP)) {
+			NL_SET_ERR_MSG(extack, "PSP isn't enabled");
+			return -EOPNOTSUPP;
+		}
+		fl_set_key_val(tb, &key->psp.spi, TCA_FLOWER_KEY_PSP_SPI,
+			       &mask->psp.spi, TCA_FLOWER_KEY_PSP_SPI_MASK,
+			       sizeof(key->psp.spi));
+		if (tb[TCA_FLOWER_KEY_PSP_VERSION]) {
+			key->psp.version =
+				nla_get_u8(tb[TCA_FLOWER_KEY_PSP_VERSION]);
+			mask->psp.version = 0xff;
+		}
+		if (tb[TCA_FLOWER_KEY_PSP_DEV]) {
+			key->psp.dev_id = nla_get_u32(tb[TCA_FLOWER_KEY_PSP_DEV]);
+			mask->psp.dev_id = 0xffff;
+		}
+		/* Only match packets which were actually decrypted */
+		key->psp.present = 1;
+		mask->psp.present = 0xff;
+	}
+
 	if (tb[TCA_FLOWER_KEY_ENC_IPV4_SRC] ||
 	    tb[TCA_FLOWER_KEY_ENC_IPV4_DST]) {
 		key->enc_control.addr_type = FLOW_DISSECTOR_KEY_IPV4_ADDRS;
@@ -2263,6 +2303,8 @@ static void fl_init_dissector(struct flow_dissector *dissector,
 			     FLOW_DISSECTOR_KEY_IPSEC, ipsec);
 	FL_KEY_SET_IF_MASKED(mask, keys, cnt,
 			     FLOW_DISSECTOR_KEY_CFM, cfm);
+	FL_KEY_SET_IF_MASKED(mask, keys, cnt,
+			     FLOW_DISSECTOR_KEY_PSP, psp);
 
 	skb_flow_dissector_init(dissector, keys, cnt);
 }
@@ -3649,6 +3691,28 @@ static int fl_dump_key(struct sk_buff *skb, struct net *net,
 	    fl_dump_key_val(skb, &key->ipsec.spi, TCA_FLOWER_KEY_SPI,
 			    &mask->ipsec.spi, TCA_FLOWER_KEY_SPI_MASK,
 			    sizeof(key->ipsec.spi)))
+		goto nla_put_failure;
+
+	if (mask->psp.present &&
+	    fl_dump_key_val(skb, &key->psp.spi, TCA_FLOWER_KEY_PSP_SPI,
+			    &mask->psp.spi, TCA_FLOWER_KEY_PSP_SPI_MASK,
+			    sizeof(key->psp.spi)))
+		goto nla_put_failure;
+	/* With a 0 SPI mask and no version or device, the SPI still carries
+	 * the match on a decrypted packet: dump it with its mask
+	 */
+	if (mask->psp.present && !mask->psp.spi && !mask->psp.version &&
+	    !mask->psp.dev_id &&
+	    (nla_put(skb, TCA_FLOWER_KEY_PSP_SPI, sizeof(key->psp.spi),
+		     &key->psp.spi) ||
+	     nla_put(skb, TCA_FLOWER_KEY_PSP_SPI_MASK, sizeof(mask->psp.spi),
+		     &mask->psp.spi)))
+		goto nla_put_failure;
+	if (mask->psp.version &&
+	    nla_put_u8(skb, TCA_FLOWER_KEY_PSP_VERSION, key->psp.version))
+		goto nla_put_failure;
+	if (mask->psp.dev_id &&
+	    nla_put_u32(skb, TCA_FLOWER_KEY_PSP_DEV, key->psp.dev_id))
 		goto nla_put_failure;
 
 	if ((key->basic.ip_proto == IPPROTO_TCP ||

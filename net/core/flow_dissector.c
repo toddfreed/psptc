@@ -28,6 +28,7 @@
 #include <linux/ptp_classify.h>
 #include <net/flow_dissector.h>
 #include <net/pkt_cls.h>
+#include <net/psp/types.h>
 #include <scsi/fc/fc_fcoe.h>
 #include <uapi/linux/batadv_packet.h>
 #include <linux/bpf.h>
@@ -510,6 +511,32 @@ void skb_flow_dissect_hash(const struct sk_buff *skb,
 	key->hash = skb_get_hash_raw(skb);
 }
 EXPORT_SYMBOL(skb_flow_dissect_hash);
+
+void skb_flow_dissect_psp(const struct sk_buff *skb,
+			  struct flow_dissector *flow_dissector,
+			  void *target_container)
+{
+#if IS_ENABLED(CONFIG_INET_PSP)
+	struct flow_dissector_key_psp *key;
+	struct psp_skb_ext *pse;
+
+	if (!dissector_uses_key(flow_dissector, FLOW_DISSECTOR_KEY_PSP))
+		return;
+
+	pse = skb_ext_find(skb, SKB_EXT_PSP);
+	if (!pse)
+		return;
+
+	key = skb_flow_dissector_target(flow_dissector,
+					FLOW_DISSECTOR_KEY_PSP,
+					target_container);
+	key->spi = pse->spi;
+	key->dev_id = pse->dev_id;
+	key->version = pse->version;
+	key->present = 1;
+#endif
+}
+EXPORT_SYMBOL(skb_flow_dissect_psp);
 
 static enum flow_dissect_ret
 __skb_flow_dissect_mpls(const struct sk_buff *skb,
