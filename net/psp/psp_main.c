@@ -151,6 +151,8 @@ void psp_dev_unregister(struct psp_dev *psd)
 		if (psp_assoc_needs_tx_key_del(pas))
 			psp_dev_tx_key_del(psd, pas);
 		list_del(&pas->assocs_list);
+		if (pas->id)
+			psp_assoc_unpublish(pas);
 	}
 
 	list_for_each_entry_safe(entry, entry_tmp, &psd->assoc_dev_list,

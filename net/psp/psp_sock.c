@@ -140,6 +140,7 @@ void psp_assoc_put(struct psp_assoc *pas)
 	if (pas && refcount_dec_and_test(&pas->refcnt))
 		call_rcu(&pas->rcu, psp_assoc_free_queue);
 }
+EXPORT_SYMBOL_GPL(psp_assoc_put);
 
 void psp_sk_assoc_free(struct sock *sk)
 {
@@ -310,7 +311,13 @@ void psp_assocs_key_rotated(struct psp_dev *psd)
 	 * be able to Rx any traffic.
 	 */
 	list_for_each_entry_safe(pas, next, &psd->prev_assocs, assocs_list) {
-		pas->generation |= ~PSP_GEN_VALID_MASK;
+		/* A socket-less Tx association holds the peer's key, which
+		 * the rotation of the device key doesn't affect
+		 */
+		if (pas->id && psp_assoc_is_tx(pas))
+			continue;
+		WRITE_ONCE(pas->generation,
+			   pas->generation | ~PSP_GEN_VALID_MASK);
 		psd->stats.stales++;
 	}
 	list_splice_init(&psd->prev_assocs, &psd->stale_assocs);

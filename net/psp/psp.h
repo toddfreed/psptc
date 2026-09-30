@@ -35,6 +35,10 @@ int psp_sock_assoc_set_tx(struct sock *sk, struct psp_dev *psd,
 			  struct netlink_ext_ack *extack);
 void psp_assocs_key_rotated(struct psp_dev *psd);
 
+int psp_assoc_publish(struct psp_assoc *pas);
+void psp_assoc_unpublish(struct psp_assoc *pas);
+struct psp_assoc *psp_assoc_get_next(struct net *net, unsigned long *index);
+
 static inline void psp_dev_get(struct psp_dev *psd)
 {
 	refcount_inc(&psd->refcnt);

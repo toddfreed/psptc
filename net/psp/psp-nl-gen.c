@@ -67,6 +67,29 @@ static const struct nla_policy psp_dev_disassoc_nl_policy[PSP_A_DEV_NSID + 1] = 
 	[PSP_A_DEV_NSID] = { .type = NLA_S32, },
 };
 
+/* PSP_CMD_RX_SPI_ALLOC - do */
+static const struct nla_policy psp_rx_spi_alloc_nl_policy[PSP_A_ASSOC_VERSION + 1] = {
+	[PSP_A_ASSOC_DEV_ID] = NLA_POLICY_MIN(NLA_U32, 1),
+	[PSP_A_ASSOC_VERSION] = NLA_POLICY_MAX(NLA_U32, 3),
+};
+
+/* PSP_CMD_ASSOC_ADD - do */
+static const struct nla_policy psp_assoc_add_nl_policy[PSP_A_ASSOC_TX_KEY + 1] = {
+	[PSP_A_ASSOC_DEV_ID] = NLA_POLICY_MIN(NLA_U32, 1),
+	[PSP_A_ASSOC_VERSION] = NLA_POLICY_MAX(NLA_U32, 3),
+	[PSP_A_ASSOC_TX_KEY] = NLA_POLICY_NESTED(psp_keys_nl_policy),
+};
+
+/* PSP_CMD_ASSOC_DEL - do */
+static const struct nla_policy psp_assoc_del_nl_policy[PSP_A_ASSOC_ID + 1] = {
+	[PSP_A_ASSOC_ID] = NLA_POLICY_MIN(NLA_U32, 1),
+};
+
+/* PSP_CMD_ASSOC_GET - do */
+static const struct nla_policy psp_assoc_get_nl_policy[PSP_A_ASSOC_ID + 1] = {
+	[PSP_A_ASSOC_ID] = NLA_POLICY_MIN(NLA_U32, 1),
+};
+
 /* Ops table for psp */
 static const struct genl_split_ops psp_nl_ops[] = {
 	{
@@ -150,6 +173,43 @@ static const struct genl_split_ops psp_nl_ops[] = {
 		.policy		= psp_dev_disassoc_nl_policy,
 		.maxattr	= PSP_A_DEV_NSID,
 		.flags		= GENL_ADMIN_PERM | GENL_CMD_CAP_DO,
+	},
+	{
+		.cmd		= PSP_CMD_RX_SPI_ALLOC,
+		.pre_doit	= psp_assoc_device_get_locked_admin,
+		.doit		= psp_nl_rx_spi_alloc_doit,
+		.post_doit	= psp_device_unlock,
+		.policy		= psp_rx_spi_alloc_nl_policy,
+		.maxattr	= PSP_A_ASSOC_VERSION,
+		.flags		= GENL_ADMIN_PERM | GENL_CMD_CAP_DO,
+	},
+	{
+		.cmd		= PSP_CMD_ASSOC_ADD,
+		.pre_doit	= psp_assoc_device_get_locked_admin,
+		.doit		= psp_nl_assoc_add_doit,
+		.post_doit	= psp_device_unlock,
+		.policy		= psp_assoc_add_nl_policy,
+		.maxattr	= PSP_A_ASSOC_TX_KEY,
+		.flags		= GENL_ADMIN_PERM | GENL_CMD_CAP_DO,
+	},
+	{
+		.cmd		= PSP_CMD_ASSOC_DEL,
+		.doit		= psp_nl_assoc_del_doit,
+		.policy		= psp_assoc_del_nl_policy,
+		.maxattr	= PSP_A_ASSOC_ID,
+		.flags		= GENL_ADMIN_PERM | GENL_CMD_CAP_DO,
+	},
+	{
+		.cmd		= PSP_CMD_ASSOC_GET,
+		.doit		= psp_nl_assoc_get_doit,
+		.policy		= psp_assoc_get_nl_policy,
+		.maxattr	= PSP_A_ASSOC_ID,
+		.flags		= GENL_ADMIN_PERM | GENL_CMD_CAP_DO,
+	},
+	{
+		.cmd	= PSP_CMD_ASSOC_GET,
+		.dumpit	= psp_nl_assoc_get_dumpit,
+		.flags	= GENL_ADMIN_PERM | GENL_CMD_CAP_DUMP,
 	},
 };
 

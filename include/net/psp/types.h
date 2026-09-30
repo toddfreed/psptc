@@ -154,6 +154,7 @@ struct psp_key_parsed {
 
 struct psp_assoc {
 	struct psp_dev *psd;
+	u32 id;
 
 	u16 dev_id;
 	u8 generation;

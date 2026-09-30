@@ -23,6 +23,16 @@ int psp_dev_rcv(struct sk_buff *skb, u16 dev_id, u8 generation, bool strip_icv);
 
 /* Kernel-facing API */
 void psp_assoc_put(struct psp_assoc *pas);
+struct psp_assoc *psp_assoc_get_by_id(struct net *net, u32 id);
+
+/* An association from the ID registry is either a Tx one, from assoc-add,
+ * or an Rx one, from rx-spi-alloc. PSP SPIs are never 0.
+ */
+static inline bool psp_assoc_is_tx(const struct psp_assoc *pas)
+{
+	DEBUG_NET_WARN_ON_ONCE(!pas->id);    /* only socket-less ones */
+	return pas->tx.spi != 0;
+}
 
 #if IS_ENABLED(CONFIG_INET_PSP)
 unsigned int psp_key_size(u32 version);

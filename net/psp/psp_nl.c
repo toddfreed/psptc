@@ -743,6 +743,19 @@ err_sock_put:
 	return err;
 }
 
+int psp_assoc_device_get_locked_admin(const struct genl_split_ops *ops,
+				      struct sk_buff *skb,
+				      struct genl_info *info)
+{
+	if (GENL_REQ_ATTR_CHECK(info, PSP_A_ASSOC_DEV_ID))
+		return -EINVAL;
+
+	info->user_ptr[0] = psp_device_get_and_lock(genl_info_net(info),
+						    info->attrs[PSP_A_ASSOC_DEV_ID],
+						    true);
+	return PTR_ERR_OR_ZERO(info->user_ptr[0]);
+}
+
 static int
 psp_nl_parse_key(struct genl_info *info, u32 attr, struct psp_key_parsed *key,
 		 unsigned int key_sz)
@@ -897,6 +910,254 @@ int psp_nl_tx_assoc_doit(struct sk_buff *skb, struct genl_info *info)
 
 err_free_msg:
 	nlmsg_free(rsp);
+	return err;
+}
+
+int psp_nl_rx_spi_alloc_doit(struct sk_buff *skb, struct genl_info *info)
+{
+	struct psp_dev *psd = info->user_ptr[0];
+	struct psp_key_parsed key;
+	struct psp_assoc *pas;
+	struct sk_buff *rsp;
+	u32 version;
+	int err;
+
+	if (GENL_REQ_ATTR_CHECK(info, PSP_A_ASSOC_VERSION))
+		return -EINVAL;
+
+	version = nla_get_u32(info->attrs[PSP_A_ASSOC_VERSION]);
+	if (!(psd->caps->versions & (1 << version))) {
+		NL_SET_BAD_ATTR(info->extack, info->attrs[PSP_A_ASSOC_VERSION]);
+		return -EOPNOTSUPP;
+	}
+
+	rsp = psp_nl_reply_new(info);
+	if (!rsp)
+		return -ENOMEM;
+
+	err = psd->ops->rx_spi_alloc(psd, version, &key, info->extack);
+	if (err)
+		goto err_free_rsp;
+
+	pas = psp_assoc_create(psd);
+	if (!pas) {
+		err = -ENOMEM;
+		goto err_free_rsp;
+	}
+	pas->version = version;
+	pas->rx.spi = key.spi;
+
+	err = psp_assoc_publish(pas);
+	if (err)
+		goto err_put_pas;
+
+	if (nla_put_u32(rsp, PSP_A_ASSOC_ID, pas->id) ||
+	    nla_put_u32(rsp, PSP_A_ASSOC_DEV_ID, psd->id) ||
+	    psp_nl_put_key(rsp, PSP_A_ASSOC_RX_KEY, version, &key)) {
+		psp_assoc_unpublish(pas);
+		err = -EMSGSIZE;
+		goto err_put_pas;
+	}
+
+	psp_assoc_put(pas);
+	memzero_explicit(&key, sizeof(key));
+
+	return psp_nl_reply_send(rsp, info);
+
+err_put_pas:
+	psp_assoc_put(pas);
+err_free_rsp:
+	memzero_explicit(&key, sizeof(key));
+	nlmsg_free(rsp);
+	return err;
+}
+
+int psp_nl_assoc_add_doit(struct sk_buff *skb, struct genl_info *info)
+{
+	struct psp_dev *psd = info->user_ptr[0];
+	struct psp_key_parsed key;
+	struct psp_assoc *pas;
+	struct sk_buff *rsp;
+	unsigned int key_sz;
+	u32 version;
+	int err;
+
+	if (GENL_REQ_ATTR_CHECK(info, PSP_A_ASSOC_VERSION) ||
+	    GENL_REQ_ATTR_CHECK(info, PSP_A_ASSOC_TX_KEY))
+		return -EINVAL;
+
+	version = nla_get_u32(info->attrs[PSP_A_ASSOC_VERSION]);
+	if (!(psd->caps->versions & (1 << version))) {
+		NL_SET_BAD_ATTR(info->extack, info->attrs[PSP_A_ASSOC_VERSION]);
+		return -EOPNOTSUPP;
+	}
+
+	key_sz = psp_key_size(version);
+	if (!key_sz)
+		return -EINVAL;
+
+	err = psp_nl_parse_key(info, PSP_A_ASSOC_TX_KEY, &key, key_sz);
+	if (err < 0)
+		return err;
+
+	rsp = psp_nl_reply_new(info);
+	if (!rsp) {
+		err = -ENOMEM;
+		goto err_clear_key;
+	}
+
+	pas = psp_assoc_create(psd);
+	if (!pas) {
+		err = -ENOMEM;
+		goto err_free_rsp;
+	}
+	pas->version = version;
+
+	err = psp_assoc_set_tx(psd, pas, &key, info->extack);
+	if (err)
+		goto err_put_pas;
+
+	err = psp_assoc_publish(pas);
+	if (err)
+		goto err_put_pas;
+
+	if (nla_put_u32(rsp, PSP_A_ASSOC_ID, pas->id) ||
+	    nla_put_u32(rsp, PSP_A_ASSOC_DEV_ID, psd->id)) {
+		psp_assoc_unpublish(pas);
+		err = -EMSGSIZE;
+		goto err_put_pas;
+	}
+
+	psp_assoc_put(pas);
+	memzero_explicit(&key, sizeof(key));
+
+	return psp_nl_reply_send(rsp, info);
+
+err_put_pas:
+	psp_assoc_put(pas);
+err_free_rsp:
+	nlmsg_free(rsp);
+err_clear_key:
+	memzero_explicit(&key, sizeof(key));
+	return err;
+}
+
+int psp_nl_assoc_del_doit(struct sk_buff *skb, struct genl_info *info)
+{
+	struct psp_assoc *pas;
+	struct sk_buff *rsp;
+
+	if (GENL_REQ_ATTR_CHECK(info, PSP_A_ASSOC_ID))
+		return -EINVAL;
+
+	pas = psp_assoc_get_by_id(genl_info_net(info),
+				  nla_get_u32(info->attrs[PSP_A_ASSOC_ID]));
+	if (!pas) {
+		NL_SET_BAD_ATTR(info->extack, info->attrs[PSP_A_ASSOC_ID]);
+		return -ENOENT;
+	}
+
+	rsp = psp_nl_reply_new(info);
+	if (!rsp) {
+		psp_assoc_put(pas);
+		return -ENOMEM;
+	}
+
+	psp_assoc_unpublish(pas);
+	psp_assoc_put(pas);
+
+	return psp_nl_reply_send(rsp, info);
+}
+
+static int
+psp_nl_assoc_fill(struct psp_assoc *pas, struct sk_buff *rsp,
+		  const struct genl_info *info)
+{
+	struct nlattr *nest;
+	void *hdr;
+
+	hdr = genlmsg_iput(rsp, info);
+	if (!hdr)
+		return -EMSGSIZE;
+
+	if (nla_put_u32(rsp, PSP_A_ASSOC_ID, pas->id) ||
+	    nla_put_u32(rsp, PSP_A_ASSOC_DEV_ID, pas->dev_id) ||
+	    nla_put_u32(rsp, PSP_A_ASSOC_VERSION, pas->version))
+		goto err_cancel_msg;
+	/* Key rotation marks it stale under the device lock */
+	if ((READ_ONCE(pas->generation) & ~PSP_GEN_VALID_MASK) &&
+	    nla_put_flag(rsp, PSP_A_ASSOC_STALE))
+		goto err_cancel_msg;
+
+	/* Report the SPI only, never the key */
+	nest = nla_nest_start(rsp, psp_assoc_is_tx(pas) ? PSP_A_ASSOC_TX_KEY :
+							 PSP_A_ASSOC_RX_KEY);
+	if (!nest ||
+	    nla_put_u32(rsp, PSP_A_KEYS_SPI,
+			be32_to_cpu(psp_assoc_is_tx(pas) ? pas->tx.spi :
+							   pas->rx.spi)))
+		goto err_cancel_msg;
+	nla_nest_end(rsp, nest);
+
+	genlmsg_end(rsp, hdr);
+	return 0;
+
+err_cancel_msg:
+	genlmsg_cancel(rsp, hdr);
+	return -EMSGSIZE;
+}
+
+int psp_nl_assoc_get_doit(struct sk_buff *skb, struct genl_info *info)
+{
+	struct psp_assoc *pas;
+	struct sk_buff *rsp;
+	int err;
+
+	if (GENL_REQ_ATTR_CHECK(info, PSP_A_ASSOC_ID))
+		return -EINVAL;
+
+	pas = psp_assoc_get_by_id(genl_info_net(info),
+				  nla_get_u32(info->attrs[PSP_A_ASSOC_ID]));
+	if (!pas) {
+		NL_SET_BAD_ATTR(info->extack, info->attrs[PSP_A_ASSOC_ID]);
+		return -ENOENT;
+	}
+
+	rsp = genlmsg_new(GENLMSG_DEFAULT_SIZE, GFP_KERNEL);
+	if (!rsp) {
+		err = -ENOMEM;
+		goto err_put_pas;
+	}
+
+	err = psp_nl_assoc_fill(pas, rsp, info);
+	if (err)
+		goto err_free_msg;
+
+	psp_assoc_put(pas);
+	return genlmsg_reply(rsp, info);
+
+err_free_msg:
+	nlmsg_free(rsp);
+err_put_pas:
+	psp_assoc_put(pas);
+	return err;
+}
+
+int psp_nl_assoc_get_dumpit(struct sk_buff *rsp, struct netlink_callback *cb)
+{
+	unsigned long index = cb->args[0];
+	struct psp_assoc *pas;
+	int err = 0;
+
+	while ((pas = psp_assoc_get_next(sock_net(rsp->sk), &index))) {
+		err = psp_nl_assoc_fill(pas, rsp, genl_info_dump(cb));
+		psp_assoc_put(pas);
+		if (err)
+			break;
+		index++;
+	}
+	cb->args[0] = index;
+
 	return err;
 }
 

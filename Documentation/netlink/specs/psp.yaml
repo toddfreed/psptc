@@ -103,6 +103,21 @@ attribute-sets:
         name: sock-fd
         doc: Sockets which should be bound to the association immediately.
         type: u32
+      -
+        name: id
+        doc: |
+          ID of an association which is not bound to a socket.
+          Such associations can be attached to packets with the tc psp action.
+        type: u32
+        checks:
+          min: 1
+      -
+        name: stale
+        doc: |
+          Key rotation has retired the device key the association was
+          created under. The device no longer decrypts the SPI of such an
+          association.
+        type: flag
   -
     name: keys
     attributes:
@@ -132,8 +147,9 @@ attribute-sets:
         name: stale-events
         type: uint
         doc: |
-          Number of times a socket's Rx got shut down due to using
-          a key which went stale (fully rotated out).
+          Number of times an Rx association, of a socket or socket-less,
+          got shut down due to using a key which went stale (fully rotated
+          out).
           Kernel statistic.
       -
         name: rx-packets
@@ -350,6 +366,84 @@ operations:
           attributes: []
         pre: psp-device-get-locked
         post: psp-device-unlock
+    -
+      name: rx-spi-alloc
+      doc: |
+        Allocate a new Rx key + SPI pair without binding it to a socket.
+        The key is derived by the device and must be passed to the peer
+        out of band, to be installed there with assoc-add. Also adds an
+        Rx association, which records the SPI, version, and the device
+        key generation, and returns its ID. A tc rule can check
+        decrypted packets against these fields with the flower psp_spi,
+        psp_dev and psp_ver keys.
+      attribute-set: assoc
+      flags: [admin-perm]
+      do:
+        request:
+          attributes:
+            - dev-id
+            - version
+        reply:
+          attributes:
+            - id
+            - dev-id
+            - rx-key
+        pre: psp-assoc-device-get-locked-admin
+        post: psp-device-unlock
+    -
+      name: assoc-add
+      doc: |
+        Add a PSP Tx association which is not bound to a socket.
+        Returns the ID of the new association.
+      attribute-set: assoc
+      flags: [admin-perm]
+      do:
+        request:
+          attributes:
+            - dev-id
+            - version
+            - tx-key
+        reply:
+          attributes:
+            - id
+            - dev-id
+        pre: psp-assoc-device-get-locked-admin
+        post: psp-device-unlock
+    -
+      name: assoc-del
+      doc: |
+        Delete a PSP association which is not bound to a socket, Tx or Rx.
+        Packets and tc actions which still reference it keep it alive.
+      attribute-set: assoc
+      flags: [admin-perm]
+      do:
+        request:
+          attributes:
+            - id
+        reply:
+          attributes: []
+    -
+      name: assoc-get
+      doc: |
+        Get / dump associations which are not bound to a socket.
+        Key material is never reported: Tx associations carry tx-key and
+        Rx associations rx-key, with the SPI only.
+      attribute-set: assoc
+      flags: [admin-perm]
+      do:
+        request:
+          attributes:
+            - id
+        reply: &assoc-all
+          attributes:
+            - id
+            - dev-id
+            - version
+            - tx-key
+            - rx-key
+            - stale
+      dump:
+        reply: *assoc-all
 
 mcast-groups:
   list:
