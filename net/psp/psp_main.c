@@ -217,6 +217,37 @@ unsigned int psp_key_size(u32 version)
 }
 EXPORT_SYMBOL(psp_key_size);
 
+/* Enabled while any METADATA_PSP dst exists, so that the transmit path of
+ * hosts which don't use socket-less PSP doesn't look for one. Disabled with
+ * a delay: the last dst is freed from a context which can't sleep.
+ */
+DEFINE_STATIC_KEY_DEFERRED_FALSE(psp_md_needed, HZ);
+EXPORT_SYMBOL_GPL(psp_md_needed);
+
+/**
+ * psp_md_alloc() - allocate a METADATA_PSP dst for an association
+ * @pas: association, the dst takes over the caller's reference on success
+ *
+ * Context: process context, may sleep.
+ * Return: the dst, or NULL on failure.
+ */
+struct metadata_dst *psp_md_alloc(struct psp_assoc *pas)
+{
+	struct metadata_dst *md;
+
+	if (!static_branch_inc(&psp_md_needed.key))
+		return NULL;
+	md = metadata_dst_alloc(0, METADATA_PSP, GFP_KERNEL);
+	if (!md) {
+		static_branch_slow_dec_deferred(&psp_md_needed);
+		return NULL;
+	}
+	md->u.psp_info.pas = pas;
+
+	return md;
+}
+EXPORT_SYMBOL_GPL(psp_md_alloc);
+
 static void psp_write_headers(struct net *net, struct sk_buff *skb, __be32 spi,
 			      u8 ver, u8 nexthdr, unsigned int udp_len,
 			      __be16 sport)
