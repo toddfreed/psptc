@@ -165,7 +165,7 @@ bool mlx5e_psp_handle_tx_skb(struct net_device *netdev,
 			     struct mlx5e_accel_tx_psp_state *psp_st)
 {
 	struct mlx5e_priv *priv = netdev_priv(netdev);
-	struct net *net = sock_net(skb->sk);
+	struct net *net = dev_net(netdev);
 
 	if (!mlx5e_psp_set_state(priv, skb, psp_st))
 		return true;
