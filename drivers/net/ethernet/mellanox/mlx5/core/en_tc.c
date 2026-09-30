@@ -62,6 +62,8 @@
 #include "en/tc_tun_encap.h"
 #include "en/tc/sample.h"
 #include "en/tc/act/act.h"
+#include "en_accel/psp.h"
+#include <net/psp/functions.h>
 #include "en/tc/post_meter.h"
 #include "lib/devcom.h"
 #include "lib/geneve.h"
@@ -3686,11 +3688,16 @@ mlx5e_clone_flow_attr_for_post_act(struct mlx5_flow_attr *attr,
 	attr2->dest_chain = 0;
 	attr2->dest_ft = NULL;
 	attr2->act_id_restore_rule = NULL;
+	attr2->psp_pas = NULL;
+	attr2->psp_decap = false;
+	attr2->psp_fdb_rx = NULL;
+	attr2->psp_fdb_tx = NULL;
 	memset(&attr2->ct_attr, 0, sizeof(attr2->ct_attr));
 
 	if (ns_type == MLX5_FLOW_NAMESPACE_FDB) {
 		attr2->esw_attr->out_count = 0;
 		attr2->esw_attr->split_count = 0;
+		attr2->esw_attr->psp_tx_ft = NULL;
 	}
 
 	attr2->branch_true = NULL;
@@ -4459,6 +4466,23 @@ mlx5_free_flow_attr_actions(struct mlx5e_tc_flow *flow, struct mlx5_flow_attr *a
 
 	free_branch_attr(flow, attr->branch_true);
 	free_branch_attr(flow, attr->branch_false);
+
+	if (attr->psp_pas) {
+		psp_assoc_put(attr->psp_pas);
+		attr->psp_pas = NULL;
+	}
+#if IS_ENABLED(CONFIG_MLX5_EN_PSP)
+	if (attr->psp_fdb_rx) {
+		mlx5e_psp_fdb_rx_put(attr->psp_fdb_rx);
+		attr->psp_fdb_rx = NULL;
+	}
+	/* Encap flows are on a VF representor, the table is the uplink's */
+	if (attr->psp_fdb_tx) {
+		mlx5e_psp_fdb_tx_put(attr->psp_fdb_tx);
+		attr->psp_fdb_tx = NULL;
+		attr->esw_attr->psp_tx_ft = NULL;
+	}
+#endif
 }
 
 static int

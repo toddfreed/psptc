@@ -593,6 +593,10 @@ struct mlx5_esw_flow_attr {
 	struct mlx5_rx_tun_attr *rx_tun_attr;
 	struct ethhdr eth;
 	struct mlx5_pkt_reformat *decap_pkt_reformat;
+	/* PSP tunnel encap: forward here instead of to the uplink, for the
+	 * device to count it (en_accel/psp_fdb.c). Referenced.
+	 */
+	struct mlx5_flow_table *psp_tx_ft;
 };
 
 int mlx5_devlink_eswitch_mode_set(struct devlink *devlink, u16 mode,

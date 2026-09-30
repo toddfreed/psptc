@@ -170,6 +170,13 @@ bool mlx5e_psp_handle_tx_skb(struct net_device *netdev,
 	if (!mlx5e_psp_set_state(priv, skb, psp_st))
 		return true;
 
+	/* In switchdev mode there are no NIC Tx tables to encrypt it */
+	if (unlikely(!priv->psp->fs)) {
+		kfree_skb_reason(skb, SKB_DROP_REASON_PSP_OUTPUT);
+		atomic_inc(&priv->psp->tx_drop);
+		return false;
+	}
+
 	/* psp_encap of the packet */
 	if (!psp_dev_encapsulate(net, skb, psp_st->spi, psp_st->ver, 0)) {
 		kfree_skb_reason(skb, SKB_DROP_REASON_PSP_OUTPUT);

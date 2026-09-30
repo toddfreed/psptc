@@ -312,6 +312,7 @@ int mlx5e_tc_tun_create_header_ipv4(struct mlx5e_priv *priv,
 
 	memset(&reformat_params, 0, sizeof(reformat_params));
 	reformat_params.type = e->reformat_type;
+	reformat_params.param_0 = e->reformat_param_0;
 	reformat_params.size = e->encap_size;
 	reformat_params.data = e->encap_header;
 	e->pkt_reformat = mlx5_packet_reformat_alloc(priv->mdev, &reformat_params,
@@ -418,6 +419,7 @@ int mlx5e_tc_tun_update_header_ipv4(struct mlx5e_priv *priv,
 
 	memset(&reformat_params, 0, sizeof(reformat_params));
 	reformat_params.type = e->reformat_type;
+	reformat_params.param_0 = e->reformat_param_0;
 	reformat_params.size = e->encap_size;
 	reformat_params.data = e->encap_header;
 	e->pkt_reformat = mlx5_packet_reformat_alloc(priv->mdev, &reformat_params,
@@ -581,6 +583,7 @@ int mlx5e_tc_tun_create_header_ipv6(struct mlx5e_priv *priv,
 
 	memset(&reformat_params, 0, sizeof(reformat_params));
 	reformat_params.type = e->reformat_type;
+	reformat_params.param_0 = e->reformat_param_0;
 	reformat_params.size = e->encap_size;
 	reformat_params.data = e->encap_header;
 	e->pkt_reformat = mlx5_packet_reformat_alloc(priv->mdev, &reformat_params,
@@ -686,6 +689,7 @@ int mlx5e_tc_tun_update_header_ipv6(struct mlx5e_priv *priv,
 
 	memset(&reformat_params, 0, sizeof(reformat_params));
 	reformat_params.type = e->reformat_type;
+	reformat_params.param_0 = e->reformat_param_0;
 	reformat_params.size = e->encap_size;
 	reformat_params.data = e->encap_header;
 	e->pkt_reformat = mlx5_packet_reformat_alloc(priv->mdev, &reformat_params,

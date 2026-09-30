@@ -430,10 +430,23 @@ static bool esw_same_vhca_id(struct mlx5_core_dev *mdev1, struct mlx5_core_dev *
 	return MLX5_CAP_GEN(mdev1, vhca_id) == MLX5_CAP_GEN(mdev2, vhca_id);
 }
 
+static bool esw_setup_uplink_fwd_psp_needed(struct mlx5_esw_flow_attr *esw_attr,
+					    int attr_idx)
+{
+	return esw_attr->psp_tx_ft &&
+	       esw_attr->dests[attr_idx].vport_valid &&
+	       esw_attr->dests[attr_idx].vport == MLX5_VPORT_UPLINK &&
+	       (esw_attr->dests[attr_idx].flags & MLX5_ESW_DEST_ENCAP_VALID);
+}
+
 static bool esw_setup_uplink_fwd_ipsec_needed(struct mlx5_eswitch *esw,
 					      struct mlx5_esw_flow_attr *esw_attr,
 					      int attr_idx)
 {
+	/* PSP encrypted already, see esw_setup_dest_fwd_psp() */
+	if (esw_setup_uplink_fwd_psp_needed(esw_attr, attr_idx))
+		return false;
+
 	if (esw->offloads.ft_ipsec_tx_pol &&
 	    esw_attr->dests[attr_idx].vport_valid &&
 	    esw_attr->dests[attr_idx].vport == MLX5_VPORT_UPLINK &&
@@ -505,12 +518,32 @@ esw_setup_dest_fwd_ipsec(struct mlx5_flow_destination *dest, struct mlx5_flow_ac
 	}
 }
 
+/* Like IPsec, PSP encap rules apply the reformat themselves and then go to
+ * a table which counts what the device encrypted before it forwards to the
+ * uplink.
+ */
+static void
+esw_setup_dest_fwd_psp(struct mlx5_flow_destination *dest, struct mlx5_flow_act *flow_act,
+		       struct mlx5_esw_flow_attr *esw_attr, int attr_idx,
+		       int dest_idx, bool pkt_reformat)
+{
+	dest[dest_idx].ft = esw_attr->psp_tx_ft;
+	dest[dest_idx].type = MLX5_FLOW_DESTINATION_TYPE_FLOW_TABLE;
+	if (pkt_reformat) {
+		flow_act->action |= MLX5_FLOW_CONTEXT_ACTION_PACKET_REFORMAT;
+		flow_act->pkt_reformat = esw_attr->dests[attr_idx].pkt_reformat;
+	}
+}
+
 static void
 esw_setup_vport_dest(struct mlx5_flow_destination *dest, struct mlx5_flow_act *flow_act,
 		     struct mlx5_eswitch *esw, struct mlx5_esw_flow_attr *esw_attr,
 		     int attr_idx, int dest_idx, bool pkt_reformat)
 {
-	if (esw_setup_uplink_fwd_ipsec_needed(esw, esw_attr, attr_idx))
+	if (esw_setup_uplink_fwd_psp_needed(esw_attr, attr_idx))
+		esw_setup_dest_fwd_psp(dest, flow_act, esw_attr, attr_idx,
+				       dest_idx, pkt_reformat);
+	else if (esw_setup_uplink_fwd_ipsec_needed(esw, esw_attr, attr_idx))
 		esw_setup_dest_fwd_ipsec(dest, flow_act, esw, esw_attr,
 					 attr_idx, dest_idx, pkt_reformat);
 	else
@@ -722,6 +755,12 @@ mlx5_eswitch_add_offloaded_rule(struct mlx5_eswitch *esw,
 
 	if (esw_attr->decap_pkt_reformat)
 		flow_act.pkt_reformat = esw_attr->decap_pkt_reformat;
+
+	/* PSP tunnel encap: the key comes with the rule, see en/tc/act/psp.c */
+	if (flow_act.action & MLX5_FLOW_CONTEXT_ACTION_CRYPTO_ENCRYPT) {
+		flow_act.crypto.type = MLX5_FLOW_CONTEXT_ENCRYPT_DECRYPT_TYPE_PSP;
+		flow_act.crypto.obj_id = attr->crypto_obj_id;
+	}
 
 	if (flow_act.action & MLX5_FLOW_CONTEXT_ACTION_COUNT) {
 		dest[i].type = MLX5_FLOW_DESTINATION_TYPE_COUNTER;

@@ -69,6 +69,8 @@ struct mlx5_nic_flow_attr {
 	struct mlx5_flow_table *hairpin_ft;
 };
 
+struct mlx5e_psp;
+
 struct mlx5_flow_attr {
 	u32 action;
 	unsigned long tc_act_cookies[TCA_ACT_MAX_PRIO];
@@ -99,6 +101,11 @@ struct mlx5_flow_attr {
 	struct mlx5_flow_attr *branch_false;
 	struct mlx5_flow_attr *jumping_attr;
 	struct mlx5_flow_handle *act_id_restore_rule;
+	u32 crypto_obj_id; /* with CRYPTO_ENCRYPT */
+	struct psp_assoc *psp_pas; /* PSP tunnel encap, referenced */
+	bool psp_decap; /* psp decap action */
+	struct mlx5e_psp *psp_fdb_rx; /* holds its FDB PSP Rx tables */
+	struct mlx5e_psp *psp_fdb_tx; /* holds its FDB PSP Tx table */
 	/* keep this union last */
 	union {
 		DECLARE_FLEX_ARRAY(struct mlx5_esw_flow_attr, esw_attr);
