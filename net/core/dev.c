@@ -111,6 +111,7 @@
 #include <net/pkt_cls.h>
 #include <net/checksum.h>
 #include <net/xfrm.h>
+#include <net/psp/functions.h>
 #include <net/tcx.h>
 #include <linux/highmem.h>
 #include <linux/init.h>
@@ -4134,9 +4135,13 @@ sw_checksum:
 }
 EXPORT_SYMBOL(skb_csum_hwoffload_help);
 
-/* Checks if this SKB belongs to an HW offloaded socket
- * and whether any SW fallbacks are required based on dev.
- * Check decrypted mark in case skb_orphan() cleared socket.
+/* Validate an skb for device encryption offload. If the skb belongs to an HW
+ * offloaded socket, apply the socket's callback. Otherwise, an skb which
+ * carries a PSP association is checked again against dev: the PSP device may
+ * have been unregistered while the skb was queued. An skb marked decrypted
+ * (to be encrypted by the device) without either is dropped rather than sent
+ * in clear text. The mark survives losing the socket to skb_orphan(), or the
+ * PSP metadata dst to routing.
  */
 static struct sk_buff *sk_validate_xmit_skb(struct sk_buff *skb,
 					    struct net_device *dev)
@@ -4156,6 +4161,15 @@ static struct sk_buff *sk_validate_xmit_skb(struct sk_buff *skb,
 
 	if (sk_validate) {
 		skb = sk_validate(sk, dev, skb);
+	} else if (unlikely(skb_psp_md(skb))) {
+		int psp = psp_xmit_md(skb, dev);
+
+		if (psp <= 0) {
+			kfree_skb_reason(skb, psp == -EMSGSIZE ?
+					 SKB_DROP_REASON_PKT_TOO_BIG :
+					 SKB_DROP_REASON_PSP_OUTPUT);
+			skb = NULL;
+		}
 	} else if (unlikely(skb_is_decrypted(skb))) {
 		pr_warn_ratelimited("unencrypted skb with no associated socket - dropping\n");
 		kfree_skb(skb);
@@ -4981,7 +4995,7 @@ int __dev_queue_xmit(struct sk_buff *skb, struct net_device *sb_dev)
 	struct net_device *dev = skb->dev;
 	struct netdev_queue *txq = NULL;
 	enum skb_drop_reason reason;
-	int cpu, rc = -ENOMEM;
+	int cpu, psp, rc = -ENOMEM;
 	bool again = false;
 	struct Qdisc *q;
 
@@ -5030,10 +5044,19 @@ int __dev_queue_xmit(struct sk_buff *skb, struct net_device *sb_dev)
 			txq = netdev_tx_queue_mapping(dev, skb);
 	}
 #endif
+	psp = psp_xmit_md(skb, dev);
+	if (unlikely(psp < 0)) {
+		reason = psp == -EMSGSIZE ? SKB_DROP_REASON_PKT_TOO_BIG :
+					    SKB_DROP_REASON_PSP_OUTPUT;
+		rc = psp;
+		goto drop;
+	}
+
 	/* If device/qdisc don't need skb->dst, release it right now while
-	 * its hot in this cpu cache.
+	 * its hot in this cpu cache. A PSP metadata dst carries the packet's
+	 * association to the driver, so keep it in that case.
 	 */
-	if (dev->priv_flags & IFF_XMIT_DST_RELEASE)
+	if ((dev->priv_flags & IFF_XMIT_DST_RELEASE) && likely(!psp))
 		skb_dst_drop(skb);
 	else
 		skb_dst_force(skb);

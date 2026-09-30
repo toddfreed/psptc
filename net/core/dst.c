@@ -26,6 +26,7 @@
 
 #include <net/dst.h>
 #include <net/dst_metadata.h>
+#include <net/psp/functions.h>
 
 int dst_discard_out(struct net *net, struct sock *sk, struct sk_buff *skb)
 {
@@ -313,6 +314,8 @@ void metadata_dst_free(struct metadata_dst *md_dst)
 #endif
 	if (md_dst->type == METADATA_XFRM)
 		dst_release(md_dst->u.xfrm_info.dst_orig);
+	if (md_dst->type == METADATA_PSP)
+		psp_assoc_put(md_dst->u.psp_info.pas);
 	kfree(md_dst);
 }
 EXPORT_SYMBOL_GPL(metadata_dst_free);
@@ -349,6 +352,8 @@ void metadata_dst_free_percpu(struct metadata_dst __percpu *md_dst)
 #endif
 		if (one_md_dst->type == METADATA_XFRM)
 			dst_release(one_md_dst->u.xfrm_info.dst_orig);
+		if (one_md_dst->type == METADATA_PSP)
+			psp_assoc_put(one_md_dst->u.psp_info.pas);
 	}
 	free_percpu(md_dst);
 }

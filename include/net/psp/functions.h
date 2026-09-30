@@ -6,6 +6,8 @@
 #include <linux/skbuff.h>
 #include <linux/rcupdate.h>
 #include <linux/udp.h>
+#include <net/dst_metadata.h>
+#include <net/gso.h>
 #include <net/sock.h>
 #include <net/tcp.h>
 #include <net/psp/types.h>
@@ -22,6 +24,7 @@ bool psp_dev_encapsulate(struct net *net, struct sk_buff *skb, __be32 spi,
 int psp_dev_rcv(struct sk_buff *skb, u16 dev_id, u8 generation, bool strip_icv);
 
 /* Kernel-facing API */
+#if IS_ENABLED(CONFIG_INET_PSP)
 void psp_assoc_put(struct psp_assoc *pas);
 struct psp_assoc *psp_assoc_get_by_id(struct net *net, u32 id);
 
@@ -34,7 +37,6 @@ static inline bool psp_assoc_is_tx(const struct psp_assoc *pas)
 	return pas->tx.spi != 0;
 }
 
-#if IS_ENABLED(CONFIG_INET_PSP)
 unsigned int psp_key_size(u32 version);
 void psp_sk_assoc_free(struct sock *sk);
 void psp_twsk_init(struct inet_timewait_sock *tw, const struct sock *sk);
@@ -144,12 +146,76 @@ static inline struct psp_assoc *psp_sk_get_assoc_rcu(const struct sock *sk)
 	return pas;
 }
 
+static inline struct psp_assoc *psp_skb_md_assoc(const struct sk_buff *skb)
+{
+	struct metadata_dst *md_dst = skb_metadata_dst(skb);
+
+	if (md_dst && md_dst->type == METADATA_PSP)
+		return md_dst->u.psp_info.pas;
+
+	return NULL;
+}
+
 static inline struct psp_assoc *psp_skb_get_assoc_rcu(struct sk_buff *skb)
 {
+	struct psp_assoc *pas;
+
+	pas = psp_skb_md_assoc(skb);
+	if (pas)
+		return pas;
+
 	if (!skb->decrypted || !skb->sk)
 		return NULL;
 
 	return psp_sk_get_assoc_rcu(skb->sk);
+}
+
+/**
+ * psp_xmit_md() - validate psp association attached as a metadata dst
+ * @skb: packet about to be queued for transmission
+ * @dev: device it is queued on
+ *
+ * If the skb has a psp association attached as metadata dst, this indicates
+ * intent to transmit encrypted, which will only happen when transmit on
+ * the main netdev of its psp device.
+ *
+ * Also check that the packet will still fit @dev's MTU once the device has
+ * added the PSP encapsulation. Sockets leave room for it (psp_sk_overhead()),
+ * whoever attached the association may not have.
+ *
+ * returns:
+ *   0 if @skb carries no psp association
+ *   1 if it does and the dst must be kept for the driver
+ *  -EINVAL if the packet must be dropped, @dev isn't of its psp device
+ *  -EMSGSIZE if the packet must be dropped, too big once encapsulated
+ */
+static inline int psp_xmit_md(const struct sk_buff *skb,
+			      const struct net_device *dev)
+{
+	unsigned int psp_encap = sizeof(struct udphdr) + PSP_HDR_SIZE +
+				 PSP_TRL_SIZE;
+	struct psp_assoc *pas = psp_skb_md_assoc(skb);
+	unsigned int mtu;
+
+	if (likely(!pas))
+		return 0;
+
+	if (rcu_access_pointer(dev->psp_dev) != pas->psd ||
+	    dev != pas->psd->main_netdev)
+		return -EINVAL;
+
+	mtu = READ_ONCE(dev->mtu);
+	if (mtu <= psp_encap)
+		return -EMSGSIZE;
+	mtu -= psp_encap;
+	if (skb_is_gso(skb)) {
+		if (!skb_gso_validate_network_len(skb, mtu))
+			return -EMSGSIZE;
+	} else if (skb->len - skb_network_offset(skb) > mtu) {
+		return -EMSGSIZE;
+	}
+
+	return 1;
 }
 
 static inline unsigned int psp_sk_overhead(const struct sock *sk)
@@ -160,6 +226,19 @@ static inline unsigned int psp_sk_overhead(const struct sock *sk)
 	return pas && pas->tx.spi ? psp_encap : 0;
 }
 #else
+static inline void psp_assoc_put(struct psp_assoc *pas) { }
+
+static inline struct psp_assoc *psp_assoc_get_by_id(struct net *net, u32 id)
+{
+	return NULL;
+}
+
+static inline int psp_xmit_md(const struct sk_buff *skb,
+			      const struct net_device *dev)
+{
+	return 0;
+}
+
 static inline void psp_sk_assoc_free(struct sock *sk) { }
 static inline void
 psp_twsk_init(struct inet_timewait_sock *tw, const struct sock *sk) { }

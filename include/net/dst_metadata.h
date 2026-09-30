@@ -13,6 +13,7 @@ enum metadata_type {
 	METADATA_HW_PORT_MUX,
 	METADATA_MACSEC,
 	METADATA_XFRM,
+	METADATA_PSP,
 };
 
 struct hw_port_info {
@@ -30,6 +31,14 @@ struct xfrm_md_info {
 	struct dst_entry *dst_orig;
 };
 
+/**
+ * struct psp_md_info - PSP association to encrypt a packet with
+ * @pas: association, the metadata_dst holds a reference on it
+ */
+struct psp_md_info {
+	struct psp_assoc *pas;
+};
+
 struct metadata_dst {
 	struct dst_entry		dst;
 	enum metadata_type		type;
@@ -38,6 +47,7 @@ struct metadata_dst {
 		struct hw_port_info	port_info;
 		struct macsec_info	macsec_info;
 		struct xfrm_md_info	xfrm_info;
+		struct psp_md_info	psp_info;
 	} u;
 };
 
@@ -49,6 +59,13 @@ static inline struct metadata_dst *skb_metadata_dst(const struct sk_buff *skb)
 		return md_dst;
 
 	return NULL;
+}
+
+static inline bool skb_psp_md(const struct sk_buff *skb)
+{
+	struct metadata_dst *md_dst = skb_metadata_dst(skb);
+
+	return md_dst && md_dst->type == METADATA_PSP;
 }
 
 static inline struct ip_tunnel_info *
@@ -125,6 +142,8 @@ static inline int skb_metadata_dst_cmp(const struct sk_buff *skb_a,
 	case METADATA_XFRM:
 		return memcmp(&a->u.xfrm_info, &b->u.xfrm_info,
 			      sizeof(a->u.xfrm_info));
+	case METADATA_PSP:
+		return a->u.psp_info.pas != b->u.psp_info.pas;
 	default:
 		return 1;
 	}
