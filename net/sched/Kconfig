@@ -939,6 +939,19 @@ config NET_ACT_GATE
 	  To compile this code as a module, choose M here: the
 	  module will be called act_gate.
 
+config NET_ACT_PSP
+	tristate "PSP encryption tc action"
+	depends on NET_CLS_ACT && INET_PSP
+	help
+	  Say Y here to allow PSP associations, created through the PSP
+	  netlink family, to be attached to packets. PSP capable devices can
+	  then encrypt them on transmit. Enables transparent psp tunnels for
+	  forwarded traffic.
+
+	  If unsure, say N.
+	  To compile this code as a module, choose M here: the
+	  module will be called act_psp.
+
 config NET_IFE_SKBMARK
 	tristate "Support to encoding decoding skb mark on IFE action"
 	depends on NET_ACT_IFE
