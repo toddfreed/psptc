@@ -221,7 +221,7 @@ static void psp_write_headers(struct net *net, struct sk_buff *skb, __be32 spi,
 		/* These operations are cheap, no need to cache the result
 		 * in another socket field.
 		 */
-		inet_get_local_port_range(net, &min, &max);
+		inet_get_local_port_range(sock_net(sk), &min, &max);
 		/* Since this is being sent on the wire obfuscate hash a bit
 		 * to minimize possibility that any useful information to an
 		 * attacker is leaked. Only upper 16 bits are relevant in the
