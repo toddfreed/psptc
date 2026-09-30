@@ -5132,6 +5132,23 @@ out:
 	return features & ~(NETIF_F_CSUM_MASK | NETIF_F_GSO_MASK);
 }
 
+/* The L4 protocol right after the fixed IP header, which the PSP Tx path
+ * requires, is one the device can complete the checksum of
+ */
+static bool mlx5e_psp_l4_csum_ok(const struct sk_buff *skb)
+{
+	u8 proto;
+
+	if (skb->protocol == htons(ETH_P_IP))
+		proto = ip_hdr(skb)->protocol;
+	else if (skb->protocol == htons(ETH_P_IPV6))
+		proto = ipv6_hdr(skb)->nexthdr;
+	else
+		return false;
+
+	return proto == IPPROTO_TCP || proto == IPPROTO_UDP;
+}
+
 netdev_features_t mlx5e_features_check(struct sk_buff *skb,
 				       struct net_device *netdev,
 				       netdev_features_t features)
@@ -5139,6 +5156,22 @@ netdev_features_t mlx5e_features_check(struct sk_buff *skb,
 	struct mlx5e_priv *priv = netdev_priv(netdev);
 
 	features = vlan_features_check(skb, features);
+
+	/* The PSP tx path fixes up the TCP checksum of a GSO skb for the
+	 * device, which is only valid for TCP, and the device only completes
+	 * a TCP or UDP checksum behind the PSP header. Have the stack segment
+	 * and checksum other skbs.
+	 */
+	if ((skb_is_gso(skb) || skb->ip_summed == CHECKSUM_PARTIAL) &&
+	    mlx5e_psp_is_offload(skb, netdev)) {
+		if (skb_is_gso(skb) &&
+		    !(skb_shinfo(skb)->gso_type &
+		      (SKB_GSO_TCPV4 | SKB_GSO_TCPV6)))
+			features &= ~NETIF_F_GSO_MASK;
+		if (skb->ip_summed == CHECKSUM_PARTIAL &&
+		    !mlx5e_psp_l4_csum_ok(skb))
+			features &= ~NETIF_F_CSUM_MASK;
+	}
 
 	/* Validate if the tunneled packet is being offloaded by HW */
 	if (skb->encapsulation &&

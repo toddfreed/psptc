@@ -189,7 +189,8 @@ unsigned int psp_key_size(u32 version)
 EXPORT_SYMBOL(psp_key_size);
 
 static void psp_write_headers(struct net *net, struct sk_buff *skb, __be32 spi,
-			      u8 ver, unsigned int udp_len, __be16 sport)
+			      u8 ver, u8 nexthdr, unsigned int udp_len,
+			      __be16 sport)
 {
 	struct udphdr *uh = udp_hdr(skb);
 	struct psphdr *psph = (struct psphdr *)(uh + 1);
@@ -236,7 +237,7 @@ static void psp_write_headers(struct net *net, struct sk_buff *skb, __be32 spi,
 	uh->check = 0;
 	udp_set_len(uh, udp_len);
 
-	psph->nexthdr = IPPROTO_TCP;
+	psph->nexthdr = nexthdr;
 	psph->hdrlen = PSP_HDRLEN_NOOPT;
 	psph->crypt_offset = 0;
 	psph->verfl = FIELD_PREP(PSPHDR_VERFL_VERSION, ver) |
@@ -245,26 +246,36 @@ static void psp_write_headers(struct net *net, struct sk_buff *skb, __be32 spi,
 	memset(&psph->iv, 0, sizeof(psph->iv));
 }
 
-/* UDP+PSP goes in at the transport header, the protocol of the fixed IP
- * header becomes UDP, and TCP the PSP next header: TCP must directly follow
- * the fixed header. It doesn't with IPv6 extension headers, whose last one
- * holds the L4 protocol.
+/* udp+psp goes in at the transport header, the protocol of the fixed ip
+ * header becomes udp, and the psp next header takes the protocol it had: the
+ * transport header must directly follow the fixed header. it doesn't with
+ * ipv6 extension headers, whose last one holds the l4 protocol. for ipv6,
+ * check the next header too, not only the network header length: the seg6,
+ * rpl and ioam6 lwtunnels point the transport header at the extension header
+ * they insert. a packet already encapsulated for a tunnel has its inner
+ * headers set up for the tunnel, and an ipv4 fragment (e.g. refragmented
+ * after tc encap) has no l4 header, or not all of it.
  */
 static bool psp_dev_encap_ok(const struct sk_buff *skb)
 {
 	u32 network_len = skb_network_header_len(skb);
 
+	if (skb->encapsulation)
+		return false;
 	if (skb->protocol == htons(ETH_P_IP))
-		return ip_hdr(skb)->protocol == IPPROTO_TCP &&
-		       network_len == ip_hdrlen(skb);
+		return network_len == ip_hdrlen(skb) &&
+		       !ip_is_fragment(ip_hdr(skb));
 	if (skb->protocol == htons(ETH_P_IPV6))
-		return ipv6_hdr(skb)->nexthdr == IPPROTO_TCP &&
+		return !ipv6_ext_hdr(ipv6_hdr(skb)->nexthdr) &&
 		       network_len == sizeof(struct ipv6hdr);
 	return false;
 }
 
-/* Encapsulate a TCP packet with PSP by adding the UDP+PSP headers and filling
- * them in.
+/* Encapsulate a packet with PSP by adding the UDP+PSP headers and filling
+ * them in. The PSP next header is taken from the IP header: packets with
+ * IPv6 extension headers, or whose transport header isn't right after the IP
+ * header, are refused, as are IPv4 fragments and packets already
+ * encapsulated for a tunnel.
  */
 bool psp_dev_encapsulate(struct net *net, struct sk_buff *skb, __be32 spi,
 			 u8 ver, __be16 sport)
@@ -272,9 +283,15 @@ bool psp_dev_encapsulate(struct net *net, struct sk_buff *skb, __be32 spi,
 	u32 network_len = skb_network_header_len(skb);
 	u32 ethr_len = skb_mac_header_len(skb);
 	u32 bufflen = ethr_len + network_len;
+	u8 nexthdr;
 
 	if (!psp_dev_encap_ok(skb))
 		return false;
+
+	if (skb->protocol == htons(ETH_P_IP))
+		nexthdr = ip_hdr(skb)->protocol;
+	else
+		nexthdr = ipv6_hdr(skb)->nexthdr;
 
 	if (skb_cow_head(skb, PSP_ENCAP_HLEN))
 		return false;
@@ -296,11 +313,11 @@ bool psp_dev_encapsulate(struct net *net, struct sk_buff *skb, __be32 spi,
 		be16_add_cpu(&ipv6_hdr(skb)->payload_len, PSP_ENCAP_HLEN);
 	}
 
-	skb_set_inner_ipproto(skb, IPPROTO_TCP);
+	skb_set_inner_ipproto(skb, nexthdr);
 	skb_set_inner_transport_header(skb, skb_transport_offset(skb) +
 						    PSP_ENCAP_HLEN);
 	skb->encapsulation = 1;
-	psp_write_headers(net, skb, spi, ver,
+	psp_write_headers(net, skb, spi, ver, nexthdr,
 			  skb->len - skb_transport_offset(skb), sport);
 
 	return true;
