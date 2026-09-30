@@ -44,6 +44,12 @@ static inline void psp_md_put(void)
 	static_branch_slow_dec_deferred(&psp_md_needed);
 }
 
+static inline struct psp_assoc *psp_assoc_hold(struct psp_assoc *pas)
+{
+	refcount_inc(&pas->refcnt);
+	return pas;
+}
+
 unsigned int psp_key_size(u32 version);
 void psp_sk_assoc_free(struct sock *sk);
 void psp_twsk_init(struct inet_timewait_sock *tw, const struct sock *sk);

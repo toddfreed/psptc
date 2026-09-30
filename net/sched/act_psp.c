@@ -388,6 +388,48 @@ static size_t tcf_psp_get_fill_size(const struct tc_action *act)
 		+ nla_total_size(sizeof(u32)); /* TCA_PSP_ASSOC_ID */
 }
 
+static void tcf_psp_offload_destructor(void *priv)
+{
+	psp_assoc_put(priv);
+}
+
+static int tcf_psp_offload_act_setup(struct tc_action *act, void *entry_data,
+				     u32 *index_inc, bool bind,
+				     struct netlink_ext_ack *extack)
+{
+	struct tcf_psp *p = to_psp(act);
+	struct tcf_psp_params *params;
+	enum flow_action_id id;
+	struct psp_assoc *pas;
+
+	rcu_read_lock();
+	params = rcu_dereference(p->params);
+	id = params->psp_action == TCA_PSP_ACT_ENCAP ? FLOW_ACTION_PSP_ENCAP :
+						       FLOW_ACTION_PSP_DECAP;
+	pas = params->md ? params->md->u.psp_info.pas : NULL;
+	if (pas && bind)
+		psp_assoc_hold(pas);
+	rcu_read_unlock();
+
+	if (bind) {
+		struct flow_action_entry *entry = entry_data;
+
+		entry->id = id;
+		entry->psp.pas = pas;
+		if (pas) {
+			entry->destructor = tcf_psp_offload_destructor;
+			entry->destructor_priv = pas;
+		}
+		*index_inc = 1;
+	} else {
+		struct flow_offload_action *fl_action = entry_data;
+
+		fl_action->id = id;
+	}
+
+	return 0;
+}
+
 static struct tc_action_ops act_psp_ops = {
 	.kind		=	"psp",
 	.id		=	TCA_ID_PSP,
@@ -397,6 +439,7 @@ static struct tc_action_ops act_psp_ops = {
 	.init		=	tcf_psp_init,
 	.cleanup	=	tcf_psp_cleanup,
 	.get_fill_size	=	tcf_psp_get_fill_size,
+	.offload_act_setup =	tcf_psp_offload_act_setup,
 	.size		=	sizeof(struct tcf_psp),
 };
 MODULE_ALIAS_NET_ACT("psp");
