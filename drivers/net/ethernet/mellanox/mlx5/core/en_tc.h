@@ -99,6 +99,9 @@ struct mlx5_flow_attr {
 	struct mlx5_flow_attr *branch_false;
 	struct mlx5_flow_attr *jumping_attr;
 	struct mlx5_flow_handle *act_id_restore_rule;
+	u32 crypto_obj_id; /* with CRYPTO_ENCRYPT */
+	struct psp_assoc *psp_pas; /* PSP tunnel encap, referenced */
+	bool psp_decap; /* holds the FDB PSP Rx tables */
 	/* keep this union last */
 	union {
 		DECLARE_FLEX_ARRAY(struct mlx5_esw_flow_attr, esw_attr);

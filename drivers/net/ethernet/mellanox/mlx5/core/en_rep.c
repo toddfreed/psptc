@@ -57,6 +57,7 @@
 #define CREATE_TRACE_POINTS
 #include "diag/en_rep_tracepoint.h"
 #include "en_accel/ipsec.h"
+#include "en_accel/psp.h"
 #include "en/tc/int_port.h"
 #include "en/ptp.h"
 #include "en/fs_ethtool.h"
@@ -1337,6 +1338,8 @@ static int mlx5e_uplink_rep_enable(struct mlx5e_priv *priv)
 	u16 max_mtu;
 
 	mlx5e_ipsec_init(priv);
+	if (mlx5e_psp_init_switchdev(priv))
+		mlx5_core_err(mdev, "PSP initialization failed\n");
 
 	netdev->min_mtu = ETH_MIN_MTU;
 	mlx5_query_port_max_mtu(priv->mdev, &max_mtu, 1);
@@ -1393,6 +1396,7 @@ static void mlx5e_uplink_rep_disable(struct mlx5e_priv *priv)
 	mlx5_lag_remove_netdev(mdev, priv->netdev);
 	mlx5_vxlan_reset_to_default(mdev->vxlan);
 
+	mlx5e_psp_cleanup_switchdev(priv);
 	mlx5e_ipsec_cleanup(priv);
 }
 

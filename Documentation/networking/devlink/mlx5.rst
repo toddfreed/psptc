@@ -103,6 +103,12 @@ parameters.
 
        SMFS mode is faster and provides better rule insertion rate compared to
        default DMFS mode.
+
+       IPsec packet offload and PSP tunnel offload in switchdev mode require
+       DMFS: the SMFS and HMFS steering implementations have no crypto
+       actions. Set it before changing the eswitch to switchdev mode, as it
+       can't change while in switchdev. Without DMFS, the PSP device is not
+       registered in switchdev mode.
    * - ``fdb_large_groups``
      - u32
      - driverinit

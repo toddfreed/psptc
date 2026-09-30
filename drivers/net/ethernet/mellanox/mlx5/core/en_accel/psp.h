@@ -28,6 +28,12 @@ struct mlx5e_psp {
 	struct mlx5e_psp_fs *fs;
 	atomic_t tx_key_cnt;
 	atomic_t tx_drop;
+	/* switchdev: decryption in the FDB, see psp_fdb.c */
+	struct mutex fdb_rx_lock;
+	/* the counters of FDB Rx and Tx tables freed so far */
+	struct mlx5e_psp_stats fdb_rx_stats;
+	struct mlx5e_psp_fdb_rx *fdb_rx;
+	struct mlx5e_psp_fdb_tx *fdb_tx;
 };
 
 static inline bool mlx5_is_psp_device(struct mlx5_core_dev *mdev)
@@ -49,6 +55,22 @@ int mlx5e_psp_register(struct mlx5e_priv *priv);
 void mlx5e_psp_unregister(struct mlx5e_priv *priv);
 int mlx5e_psp_init(struct mlx5e_priv *priv);
 void mlx5e_psp_cleanup(struct mlx5e_priv *priv);
+int mlx5e_psp_init_switchdev(struct mlx5e_priv *priv);
+bool mlx5e_psp_fdb_steering_ok(struct mlx5_core_dev *mdev);
+void mlx5e_psp_cleanup_switchdev(struct mlx5e_priv *priv);
+int mlx5e_psp_tx_key_id(struct mlx5e_priv *priv, struct psp_assoc *pas,
+			u32 *id);
+#if IS_ENABLED(CONFIG_MLX5_CLS_ACT)
+int mlx5e_psp_fdb_rx_get(struct mlx5e_priv *priv);
+void mlx5e_psp_fdb_rx_put(struct mlx5e_priv *priv);
+struct mlx5_flow_table *mlx5e_psp_fdb_tx_get(struct mlx5e_priv *priv);
+void mlx5e_psp_fdb_tx_put(struct mlx5e_priv *priv);
+void mlx5e_psp_fdb_rx_get_stats(struct mlx5e_priv *priv,
+				struct mlx5e_psp_stats *stats);
+#else
+static inline void mlx5e_psp_fdb_rx_get_stats(struct mlx5e_priv *priv,
+					      struct mlx5e_psp_stats *stats) { }
+#endif
 #else
 static inline void mlx5_accel_psp_fs_cleanup_rx_tables(struct mlx5e_priv *priv) { }
 static inline void mlx5_accel_psp_fs_cleanup_tx_tables(struct mlx5e_priv *priv) { }
@@ -61,5 +83,7 @@ static inline int mlx5e_psp_register(struct mlx5e_priv *priv) { return 0; }
 static inline void mlx5e_psp_unregister(struct mlx5e_priv *priv) { }
 static inline int mlx5e_psp_init(struct mlx5e_priv *priv) { return 0; }
 static inline void mlx5e_psp_cleanup(struct mlx5e_priv *priv) { }
+static inline int mlx5e_psp_init_switchdev(struct mlx5e_priv *priv) { return 0; }
+static inline void mlx5e_psp_cleanup_switchdev(struct mlx5e_priv *priv) { }
 #endif /* CONFIG_MLX5_EN_PSP */
 #endif /* __MLX5E_ACCEL_PSP_H__ */

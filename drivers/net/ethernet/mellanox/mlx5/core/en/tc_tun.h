@@ -19,7 +19,13 @@ enum {
 	MLX5E_TC_TUNNEL_TYPE_GENEVE,
 	MLX5E_TC_TUNNEL_TYPE_GRETAP,
 	MLX5E_TC_TUNNEL_TYPE_MPLSOUDP,
+	MLX5E_TC_TUNNEL_TYPE_PSP,
 };
+
+/* PSP tunnel encap: the tunnel ID carries the association */
+#define MLX5E_PSP_TUN_ID_SPI		GENMASK_ULL(31, 0)
+#define MLX5E_PSP_TUN_ID_VERSION	GENMASK_ULL(39, 32)
+#define MLX5E_PSP_TUN_ID_NEXTHDR	GENMASK_ULL(47, 40)
 
 struct mlx5e_encap_key {
 	const struct ip_tunnel_key *ip_tun_key;
@@ -58,6 +64,7 @@ extern struct mlx5e_tc_tunnel vxlan_tunnel;
 extern struct mlx5e_tc_tunnel geneve_tunnel;
 extern struct mlx5e_tc_tunnel gre_tunnel;
 extern struct mlx5e_tc_tunnel mplsoudp_tunnel;
+extern struct mlx5e_tc_tunnel psp_tunnel;
 
 struct mlx5e_tc_tunnel *mlx5e_get_tc_tun(struct net_device *tunnel_dev);
 

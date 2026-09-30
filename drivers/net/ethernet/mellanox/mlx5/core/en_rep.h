@@ -175,6 +175,7 @@ enum {
 
 struct mlx5e_decap_key {
 	struct ethhdr key;
+	int reformat_type;
 };
 
 struct mlx5e_decap_entry {
@@ -215,6 +216,7 @@ struct mlx5e_encap_entry {
 	int route_dev_ifindex;
 	struct mlx5e_tc_tunnel *tunnel;
 	int reformat_type;
+	u8 reformat_param_0;
 	u8 flags;
 	char *encap_header;
 	int encap_size;

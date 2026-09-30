@@ -166,6 +166,7 @@ void mlx5e_tc_encap_flows_add(struct mlx5e_priv *priv,
 
 	memset(&reformat_params, 0, sizeof(reformat_params));
 	reformat_params.type = e->reformat_type;
+	reformat_params.param_0 = e->reformat_param_0;
 	reformat_params.size = e->encap_size;
 	reformat_params.data = e->encap_header;
 	e->pkt_reformat = mlx5_packet_reformat_alloc(priv->mdev,
@@ -624,7 +625,8 @@ bool mlx5e_tc_tun_encap_info_equal_options(struct mlx5e_encap_key *a,
 static int cmp_decap_info(struct mlx5e_decap_key *a,
 			  struct mlx5e_decap_key *b)
 {
-	return memcmp(&a->key, &b->key, sizeof(b->key));
+	return memcmp(&a->key, &b->key, sizeof(b->key)) ||
+	       a->reformat_type != b->reformat_type;
 }
 
 static int hash_encap_info(struct mlx5e_encap_key *key)
@@ -635,7 +637,7 @@ static int hash_encap_info(struct mlx5e_encap_key *key)
 
 static int hash_decap_info(struct mlx5e_decap_key *key)
 {
-	return jhash(&key->key, sizeof(key->key), 0);
+	return jhash(&key->key, sizeof(key->key), key->reformat_type);
 }
 
 bool mlx5e_encap_take(struct mlx5e_encap_entry *e)
@@ -840,7 +842,10 @@ int mlx5e_attach_encap(struct mlx5e_priv *priv,
 	mpls_info = &parse_attr->mpls_info[out_index];
 	family = ip_tunnel_info_af(tun_info);
 	key.ip_tun_key = &tun_info->key;
-	key.tc_tunnel = mlx5e_get_tc_tun(mirred_dev);
+	if (attr->psp_pas)
+		key.tc_tunnel = &psp_tunnel;
+	else
+		key.tc_tunnel = mlx5e_get_tc_tun(mirred_dev);
 	if (!key.tc_tunnel) {
 		NL_SET_ERR_MSG_MOD(extack, "Unsupported tunnel");
 		return -EOPNOTSUPP;
@@ -879,7 +884,7 @@ int mlx5e_attach_encap(struct mlx5e_priv *priv,
 	}
 	e->tun_info = tun_info;
 	memcpy(&e->mpls_info, mpls_info, sizeof(*mpls_info));
-	err = mlx5e_tc_tun_init_encap_attr(mirred_dev, priv, e, extack);
+	err = key.tc_tunnel->init_encap_attr(mirred_dev, priv, e, extack);
 	if (err)
 		goto out_err_init;
 
@@ -959,6 +964,10 @@ int mlx5e_attach_decap(struct mlx5e_priv *priv,
 	}
 
 	key.key = attr->eth;
+	/* PSP tunnel decap (en/tc/act/psp.c) also removes the trailer */
+	key.reformat_type = flow->attr->psp_decap ?
+			    MLX5_REFORMAT_TYPE_DEL_PSP_TUNNEL :
+			    MLX5_REFORMAT_TYPE_L3_TUNNEL_TO_L2;
 	hash_key = hash_decap_info(&key);
 	mutex_lock(&esw->offloads.decap_tbl_lock);
 	d = mlx5e_decap_get(priv, &key, hash_key);
@@ -987,7 +996,7 @@ int mlx5e_attach_decap(struct mlx5e_priv *priv,
 	mutex_unlock(&esw->offloads.decap_tbl_lock);
 
 	memset(&reformat_params, 0, sizeof(reformat_params));
-	reformat_params.type = MLX5_REFORMAT_TYPE_L3_TUNNEL_TO_L2;
+	reformat_params.type = key.reformat_type;
 	reformat_params.size = sizeof(attr->eth);
 	reformat_params.data = &attr->eth;
 	d->pkt_reformat = mlx5_packet_reformat_alloc(priv->mdev,

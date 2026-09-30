@@ -866,6 +866,10 @@ mlx5e_psp_set_config(struct psp_dev *psd, struct psp_dev_config *conf,
 	bool enable_psp = conf->versions;
 	int err = 0;
 
+	/* switchdev: no NIC tables, PSP is only used by tc offload */
+	if (!priv->psp->fs)
+		return 0;
+
 	netdev_lock(priv->netdev);
 	if (!psp_enabled && enable_psp)
 		err = accel_psp_fs_create(priv, extack);
@@ -995,9 +999,12 @@ static void
 mlx5e_psp_get_stats(struct psp_dev *psd, struct psp_dev_stats *stats)
 {
 	struct mlx5e_priv *priv = netdev_priv(psd->main_netdev);
-	struct mlx5e_psp_stats nstats;
+	struct mlx5e_psp_stats nstats = {};
 
-	mlx5e_accel_psp_fs_get_stats_fill(priv, &nstats);
+	if (priv->psp->fs)
+		mlx5e_accel_psp_fs_get_stats_fill(priv, &nstats);
+	else
+		mlx5e_psp_fdb_rx_get_stats(priv, &nstats);
 	stats->rx_packets = nstats.psp_rx_pkts;
 	stats->rx_bytes = nstats.psp_rx_bytes;
 	stats->rx_auth_fail = nstats.psp_rx_pkts_auth_fail;
@@ -1051,6 +1058,80 @@ int mlx5e_psp_register(struct mlx5e_priv *priv)
 	}
 	psp->psd = psd;
 
+	return 0;
+}
+
+/* The uplink representor's PSP device, in switchdev mode, only manages
+ * keys and SPIs for tc offload in the FDB (en/tc/act/psp.c). There are no
+ * NIC steering tables, so sockets on the uplink can't use it.
+ */
+/* Like IPsec packet offload (mlx5_ipsec_device_caps()), PSP in the FDB needs
+ * firmware steering: the SW (smfs) and HW (hmfs) steering backends implement
+ * no crypto actions or PSP reformats. The mode can't be changed while the
+ * eswitch is in switchdev mode.
+ */
+bool mlx5e_psp_fdb_steering_ok(struct mlx5_core_dev *mdev)
+{
+	return mdev->priv.steering->mode == MLX5_FLOW_STEERING_MODE_DMFS;
+}
+
+int mlx5e_psp_init_switchdev(struct mlx5e_priv *priv)
+{
+	struct mlx5_core_dev *mdev = priv->mdev;
+	struct mlx5e_psp *psp;
+	int err;
+
+	if (!mlx5_is_psp_device(mdev) ||
+	    !MLX5_CAP_ESW_FLOWTABLE_FDB(mdev, psp_encrypt) ||
+	    !MLX5_CAP_ESW_FLOWTABLE_FDB(mdev, psp_decrypt)) {
+		mlx5_core_dbg(mdev, "PSP offload in the FDB not supported\n");
+		return 0;
+	}
+
+	if (!mlx5e_psp_fdb_steering_ok(mdev)) {
+		mlx5_core_info(mdev, "PSP offload in switchdev mode requires flow_steering_mode dmfs\n");
+		return 0;
+	}
+
+	psp = kzalloc_obj(*psp);
+	if (!psp)
+		return -ENOMEM;
+	mutex_init(&psp->fdb_rx_lock);
+	priv->psp = psp;
+
+	err = mlx5e_psp_register(priv);
+	if (err) {
+		priv->psp = NULL;
+		mutex_destroy(&psp->fdb_rx_lock);
+		kfree(psp);
+	}
+	return err;
+}
+
+void mlx5e_psp_cleanup_switchdev(struct mlx5e_priv *priv)
+{
+	struct mlx5e_psp *psp = priv->psp;
+
+	if (!psp)
+		return;
+
+	mlx5e_psp_unregister(priv);
+	WARN_ON(atomic_read(&psp->tx_key_cnt));
+	WARN_ON(psp->fdb_rx);
+	WARN_ON(psp->fdb_tx);
+	priv->psp = NULL;
+	mutex_destroy(&psp->fdb_rx_lock);
+	kfree(psp);
+}
+
+/* The encryption key object of a Tx association, for use in FDB rules */
+int mlx5e_psp_tx_key_id(struct mlx5e_priv *priv, struct psp_assoc *pas,
+			u32 *id)
+{
+	if (!priv->psp || !priv->psp->psd || pas->psd != priv->psp->psd)
+		return -EINVAL;
+
+	*id = ((struct psp_key *)pas->drv_data)->id;
 	return 0;
 }
 

@@ -114,6 +114,10 @@ mlx5_core-$(CONFIG_MLX5_EN_TLS) += en_accel/ktls_stats.o \
 				   en_accel/ktls_tx.o en_accel/ktls_rx.o
 
 mlx5_core-$(CONFIG_MLX5_EN_PSP) += en_accel/psp.o en_accel/psp_rxtx.o
+ifneq ($(CONFIG_MLX5_EN_PSP),)
+mlx5_core-$(CONFIG_MLX5_CLS_ACT) += en/tc_tun_psp.o en/tc/act/psp.o \
+				    en_accel/psp_fdb.o
+endif
 
 #
 # SW Steering

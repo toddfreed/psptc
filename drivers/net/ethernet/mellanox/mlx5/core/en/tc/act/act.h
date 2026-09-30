@@ -6,6 +6,7 @@
 
 #include <net/tc_act/tc_pedit.h>
 #include <net/flow_offload.h>
+#include <net/ip_tunnels.h>
 #include <linux/netlink.h>
 #include "eswitch.h"
 #include "pedit.h"
@@ -24,6 +25,8 @@ struct mlx5e_tc_act_parse_state {
 	bool eth_pop;
 	bool ptype_host;
 	const struct ip_tunnel_info *tun_info;
+	/* tun_info with the PSP association encoded, see en/tc/act/psp.c */
+	struct ip_tunnel_info psp_tun_info;
 	struct mlx5e_mpls_info mpls_info;
 	int ifindexes[MLX5_MAX_FLOW_FWD_VPORTS];
 	int if_count;
@@ -86,6 +89,8 @@ extern struct mlx5e_tc_act mlx5e_tc_act_vlan;
 extern struct mlx5e_tc_act mlx5e_tc_act_vlan_mangle;
 extern struct mlx5e_tc_act mlx5e_tc_act_mpls_push;
 extern struct mlx5e_tc_act mlx5e_tc_act_mpls_pop;
+extern struct mlx5e_tc_act mlx5e_tc_act_psp_encap;
+extern struct mlx5e_tc_act mlx5e_tc_act_psp_decap;
 extern struct mlx5e_tc_act mlx5e_tc_act_mirred;
 extern struct mlx5e_tc_act mlx5e_tc_act_redirect;
 extern struct mlx5e_tc_act mlx5e_tc_act_mirred_nic;

@@ -30,6 +30,10 @@ static struct mlx5e_tc_act *tc_acts_fdb[NUM_FLOW_ACTIONS] = {
 	[FLOW_ACTION_MPLS_POP] = &mlx5e_tc_act_mpls_pop,
 	[FLOW_ACTION_VLAN_PUSH_ETH] = &mlx5e_tc_act_vlan,
 	[FLOW_ACTION_VLAN_POP_ETH] = &mlx5e_tc_act_vlan,
+#if IS_ENABLED(CONFIG_MLX5_EN_PSP)
+	[FLOW_ACTION_PSP_ENCAP] = &mlx5e_tc_act_psp_encap,
+	[FLOW_ACTION_PSP_DECAP] = &mlx5e_tc_act_psp_decap,
+#endif
 };
 
 static struct mlx5e_tc_act *tc_acts_nic[NUM_FLOW_ACTIONS] = {

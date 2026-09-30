@@ -210,6 +210,13 @@ IPsec capability enabled, any IPsec offloading is blocked on the PF.
 mlx5 driver support devlink port function attr mechanism to setup ipsec_packet
 capability. (refer to Documentation/networking/devlink/devlink-port.rst)
 
+PSP for VF traffic
+~~~~~~~~~~~~~~~~~~
+VFs have no PSP capability, and there is no devlink port function attribute
+for it. PSP for a VF's traffic is done in the eswitch instead, with tc PSP
+tunnel mode rules on the VF representor and the uplink (refer to
+Documentation/networking/psp.rst).
+
 SF state setup
 --------------
 
