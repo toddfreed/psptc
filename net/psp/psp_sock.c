@@ -155,6 +155,7 @@ void psp_assoc_put(struct psp_assoc *pas)
 	if (pas && refcount_dec_and_test(&pas->refcnt))
 		call_rcu(&pas->rcu, psp_assoc_free_queue);
 }
+EXPORT_SYMBOL_GPL(psp_assoc_put);
 
 void psp_sk_assoc_free(struct sock *sk)
 {

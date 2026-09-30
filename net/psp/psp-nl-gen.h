@@ -24,6 +24,9 @@ int psp_assoc_device_get_locked(const struct genl_split_ops *ops,
 int psp_device_get_locked_dev_assoc(const struct genl_split_ops *ops,
 				    struct sk_buff *skb,
 				    struct genl_info *info);
+int psp_assoc_device_get_locked_admin(const struct genl_split_ops *ops,
+				      struct sk_buff *skb,
+				      struct genl_info *info);
 void
 psp_device_unlock(const struct genl_split_ops *ops, struct sk_buff *skb,
 		  struct genl_info *info);
@@ -38,6 +41,11 @@ int psp_nl_get_stats_doit(struct sk_buff *skb, struct genl_info *info);
 int psp_nl_get_stats_dumpit(struct sk_buff *skb, struct netlink_callback *cb);
 int psp_nl_dev_assoc_doit(struct sk_buff *skb, struct genl_info *info);
 int psp_nl_dev_disassoc_doit(struct sk_buff *skb, struct genl_info *info);
+int psp_nl_rx_spi_alloc_doit(struct sk_buff *skb, struct genl_info *info);
+int psp_nl_assoc_add_doit(struct sk_buff *skb, struct genl_info *info);
+int psp_nl_assoc_del_doit(struct sk_buff *skb, struct genl_info *info);
+int psp_nl_assoc_get_doit(struct sk_buff *skb, struct genl_info *info);
+int psp_nl_assoc_get_dumpit(struct sk_buff *skb, struct netlink_callback *cb);
 
 enum {
 	PSP_NLGRP_MGMT,

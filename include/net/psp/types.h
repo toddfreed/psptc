@@ -82,6 +82,8 @@ struct psp_assoc_dev {
  *			device key
  * @stale_assocs:	associations which use a rotated out key, or were
  *			superseded by a rekey
+ * @sockless_assocs:	socket-less Tx associations, which key rotation
+ *			doesn't move
  * @tx_del:		deferred TX key deletion state
  * @tx_del.active:	TX keys to be deleted after the current grace period
  * @tx_del.next:	TX keys queued for deletion during current grace period
@@ -115,6 +117,7 @@ struct psp_dev {
 	struct list_head active_assocs;
 	struct list_head prev_assocs;
 	struct list_head stale_assocs;
+	struct list_head sockless_assocs;
 
 	struct {
 		struct list_head active;
@@ -183,6 +186,7 @@ enum psp_assoc_flags {
 
 struct psp_assoc {
 	struct psp_dev *psd;
+	u32 id;
 
 	u16 dev_id;
 	u8 generation;
