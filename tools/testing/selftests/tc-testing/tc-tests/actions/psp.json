@@ -455,5 +455,118 @@
         "teardown": [
             "$TC qdisc del dev $DEV1 ingress"
         ]
+    },
+    {
+        "id": "eb73",
+        "name": "Add psp decap action in tunnel mode",
+        "category": [
+            "actions",
+            "psp"
+        ],
+        "dependsOn": "$TC actions add action psp help 2>&1 | grep -q tunnel",
+        "plugins": {
+            "requires": "nsPlugin"
+        },
+        "setup": [
+            [
+                "$TC actions flush action psp",
+                0,
+                1,
+                255
+            ]
+        ],
+        "cmdUnderTest": "$TC actions add action psp decap mode tunnel index 20",
+        "expExitCode": "0",
+        "verifyCmd": "$TC actions get action psp index 20",
+        "matchPattern": "action order [0-9]+: psp decap mode tunnel pipe.*index 20 ref",
+        "matchCount": "1",
+        "teardown": [
+            "$TC actions flush action psp"
+        ]
+    },
+    {
+        "id": "6975",
+        "name": "Add psp decap action in transport mode",
+        "category": [
+            "actions",
+            "psp"
+        ],
+        "dependsOn": "$TC actions add action psp help 2>&1 | grep -q tunnel",
+        "plugins": {
+            "requires": "nsPlugin"
+        },
+        "setup": [
+            [
+                "$TC actions flush action psp",
+                0,
+                1,
+                255
+            ]
+        ],
+        "cmdUnderTest": "$TC actions add action psp decap mode transport index 21",
+        "expExitCode": "0",
+        "verifyCmd": "$TC actions get action psp index 21",
+        "matchPattern": "action order [0-9]+: psp decap pipe.*index 21 ref",
+        "matchCount": "1",
+        "teardown": [
+            "$TC actions flush action psp"
+        ]
+    },
+    {
+        "id": "dfae",
+        "name": "Replace psp decap action mode",
+        "category": [
+            "actions",
+            "psp"
+        ],
+        "dependsOn": "$TC actions add action psp help 2>&1 | grep -q tunnel",
+        "plugins": {
+            "requires": "nsPlugin"
+        },
+        "setup": [
+            [
+                "$TC actions flush action psp",
+                0,
+                1,
+                255
+            ],
+            "$TC actions add action psp decap index 22"
+        ],
+        "cmdUnderTest": "$TC actions replace action psp decap mode tunnel index 22",
+        "expExitCode": "0",
+        "verifyCmd": "$TC actions get action psp index 22",
+        "matchPattern": "action order [0-9]+: psp decap mode tunnel pipe.*index 22 ref",
+        "matchCount": "1",
+        "teardown": [
+            "$TC actions flush action psp"
+        ]
+    },
+    {
+        "id": "39f8",
+        "name": "Add psp action with an invalid mode",
+        "category": [
+            "actions",
+            "psp"
+        ],
+        "dependsOn": "$TC actions add action psp help 2>&1 | grep -q tunnel",
+        "plugins": {
+            "requires": "nsPlugin"
+        },
+        "setup": [
+            [
+                "$TC actions flush action psp",
+                0,
+                1,
+                255
+            ]
+        ],
+        "cmdUnderTest": "$TC actions add action psp decap mode foo index 23",
+        "expExitCode": "255",
+        "verifyCmd": "$TC actions list action psp",
+        "matchPattern": "action order [0-9]+: psp",
+        "matchCount": "0",
+        "teardown": [
+            "$TC actions flush action psp"
+        ]
     }
 ]
