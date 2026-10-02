@@ -24,6 +24,7 @@ try_modprobe act_mpls
 try_modprobe act_nat
 try_modprobe act_pedit
 try_modprobe act_police
+try_modprobe act_psp
 try_modprobe act_sample
 try_modprobe act_simple
 try_modprobe act_skbedit

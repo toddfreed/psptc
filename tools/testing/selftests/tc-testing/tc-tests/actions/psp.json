@@ -1,0 +1,459 @@
+[
+    {
+        "id": "8357",
+        "name": "Add psp decap action",
+        "category": [
+            "actions",
+            "psp"
+        ],
+        "dependsOn": "$TC actions add action psp help 2>&1 | grep -q decap",
+        "plugins": {
+            "requires": "nsPlugin"
+        },
+        "setup": [
+            [
+                "$TC actions flush action psp",
+                0,
+                1,
+                255
+            ]
+        ],
+        "cmdUnderTest": "$TC actions add action psp decap index 1",
+        "expExitCode": "0",
+        "verifyCmd": "$TC actions get action psp index 1",
+        "matchPattern": "action order [0-9]+: psp decap pipe.*index 1 ref",
+        "matchCount": "1",
+        "teardown": [
+            "$TC actions flush action psp"
+        ]
+    },
+    {
+        "id": "7676",
+        "name": "Add psp decap action with drop control",
+        "category": [
+            "actions",
+            "psp"
+        ],
+        "dependsOn": "$TC actions add action psp help 2>&1 | grep -q decap",
+        "plugins": {
+            "requires": "nsPlugin"
+        },
+        "setup": [
+            [
+                "$TC actions flush action psp",
+                0,
+                1,
+                255
+            ]
+        ],
+        "cmdUnderTest": "$TC actions add action psp decap drop index 2",
+        "expExitCode": "0",
+        "verifyCmd": "$TC actions get action psp index 2",
+        "matchPattern": "action order [0-9]+: psp decap drop.*index 2 ref",
+        "matchCount": "1",
+        "teardown": [
+            "$TC actions flush action psp"
+        ]
+    },
+    {
+        "id": "9a26",
+        "name": "Add psp decap action without index",
+        "category": [
+            "actions",
+            "psp"
+        ],
+        "dependsOn": "$TC actions add action psp help 2>&1 | grep -q decap",
+        "plugins": {
+            "requires": "nsPlugin"
+        },
+        "setup": [
+            [
+                "$TC actions flush action psp",
+                0,
+                1,
+                255
+            ]
+        ],
+        "cmdUnderTest": "$TC actions add action psp decap",
+        "expExitCode": "0",
+        "verifyCmd": "$TC actions list action psp",
+        "matchPattern": "action order [0-9]+: psp decap pipe",
+        "matchCount": "1",
+        "teardown": [
+            "$TC actions flush action psp"
+        ]
+    },
+    {
+        "id": "156e",
+        "name": "Replace psp decap action",
+        "category": [
+            "actions",
+            "psp"
+        ],
+        "dependsOn": "$TC actions add action psp help 2>&1 | grep -q decap",
+        "plugins": {
+            "requires": "nsPlugin"
+        },
+        "setup": [
+            [
+                "$TC actions flush action psp",
+                0,
+                1,
+                255
+            ],
+            "$TC actions add action psp decap index 3"
+        ],
+        "cmdUnderTest": "$TC actions replace action psp decap pass index 3",
+        "expExitCode": "0",
+        "verifyCmd": "$TC actions get action psp index 3",
+        "matchPattern": "action order [0-9]+: psp decap pass.*index 3 ref",
+        "matchCount": "1",
+        "teardown": [
+            "$TC actions flush action psp"
+        ]
+    },
+    {
+        "id": "006b",
+        "name": "Add psp action with an existing index",
+        "category": [
+            "actions",
+            "psp"
+        ],
+        "dependsOn": "$TC actions add action psp help 2>&1 | grep -q decap",
+        "plugins": {
+            "requires": "nsPlugin"
+        },
+        "setup": [
+            [
+                "$TC actions flush action psp",
+                0,
+                1,
+                255
+            ],
+            "$TC actions add action psp decap index 4"
+        ],
+        "cmdUnderTest": "$TC actions add action psp decap pass index 4",
+        "expExitCode": "255",
+        "verifyCmd": "$TC actions get action psp index 4",
+        "matchPattern": "action order [0-9]+: psp decap pipe.*index 4 ref",
+        "matchCount": "1",
+        "teardown": [
+            "$TC actions flush action psp"
+        ]
+    },
+    {
+        "id": "3f41",
+        "name": "Delete psp action",
+        "category": [
+            "actions",
+            "psp"
+        ],
+        "dependsOn": "$TC actions add action psp help 2>&1 | grep -q decap",
+        "plugins": {
+            "requires": "nsPlugin"
+        },
+        "setup": [
+            [
+                "$TC actions flush action psp",
+                0,
+                1,
+                255
+            ],
+            "$TC actions add action psp decap index 5"
+        ],
+        "cmdUnderTest": "$TC actions del action psp index 5",
+        "expExitCode": "0",
+        "verifyCmd": "$TC actions list action psp",
+        "matchPattern": "action order [0-9]+: psp",
+        "matchCount": "0",
+        "teardown": [
+            "$TC actions flush action psp"
+        ]
+    },
+    {
+        "id": "2b21",
+        "name": "Flush psp actions",
+        "category": [
+            "actions",
+            "psp"
+        ],
+        "dependsOn": "$TC actions add action psp help 2>&1 | grep -q decap",
+        "plugins": {
+            "requires": "nsPlugin"
+        },
+        "setup": [
+            [
+                "$TC actions flush action psp",
+                0,
+                1,
+                255
+            ],
+            "$TC actions add action psp decap index 6",
+            "$TC actions add action psp decap drop index 7"
+        ],
+        "cmdUnderTest": "$TC actions flush action psp",
+        "expExitCode": "0",
+        "verifyCmd": "$TC actions list action psp",
+        "matchPattern": "action order [0-9]+: psp",
+        "matchCount": "0",
+        "teardown": [
+            "$TC actions flush action psp"
+        ]
+    },
+    {
+        "id": "2d50",
+        "name": "Add psp action without encap or decap",
+        "category": [
+            "actions",
+            "psp"
+        ],
+        "dependsOn": "$TC actions add action psp help 2>&1 | grep -q decap",
+        "plugins": {
+            "requires": "nsPlugin"
+        },
+        "setup": [
+            [
+                "$TC actions flush action psp",
+                0,
+                1,
+                255
+            ]
+        ],
+        "cmdUnderTest": "$TC actions add action psp index 12",
+        "expExitCode": "255",
+        "verifyCmd": "$TC actions list action psp",
+        "matchPattern": "action order [0-9]+: psp",
+        "matchCount": "0",
+        "teardown": [
+            "$TC actions flush action psp"
+        ]
+    },
+    {
+        "id": "cab5",
+        "name": "Add psp encap action without assoc, with index",
+        "category": [
+            "actions",
+            "psp"
+        ],
+        "dependsOn": "$TC actions add action psp help 2>&1 | grep -q decap",
+        "plugins": {
+            "requires": "nsPlugin"
+        },
+        "setup": [
+            [
+                "$TC actions flush action psp",
+                0,
+                1,
+                255
+            ]
+        ],
+        "cmdUnderTest": "$TC actions add action psp encap index 8",
+        "expExitCode": "255",
+        "verifyCmd": "$TC actions list action psp",
+        "matchPattern": "action order [0-9]+: psp",
+        "matchCount": "0",
+        "teardown": [
+            "$TC actions flush action psp"
+        ]
+    },
+    {
+        "id": "3203",
+        "name": "Add psp encap action with an unknown assoc",
+        "category": [
+            "actions",
+            "psp"
+        ],
+        "dependsOn": "$TC actions add action psp help 2>&1 | grep -q decap",
+        "plugins": {
+            "requires": "nsPlugin"
+        },
+        "setup": [
+            [
+                "$TC actions flush action psp",
+                0,
+                1,
+                255
+            ]
+        ],
+        "cmdUnderTest": "$TC actions add action psp encap assoc 4294967295 index 9",
+        "expExitCode": "255",
+        "verifyCmd": "$TC actions list action psp",
+        "matchPattern": "action order [0-9]+: psp",
+        "matchCount": "0",
+        "teardown": [
+            "$TC actions flush action psp"
+        ]
+    },
+    {
+        "id": "0c17",
+        "name": "Reject psp decap action with an assoc",
+        "category": [
+            "actions",
+            "psp"
+        ],
+        "dependsOn": "$TC actions add action psp help 2>&1 | grep -q decap",
+        "plugins": {
+            "requires": "nsPlugin"
+        },
+        "setup": [
+            [
+                "$TC actions flush action psp",
+                0,
+                1,
+                255
+            ]
+        ],
+        "cmdUnderTest": "$TC actions add action psp decap assoc 1 index 10",
+        "expExitCode": "255",
+        "verifyCmd": "$TC actions list action psp",
+        "matchPattern": "action order [0-9]+: psp",
+        "matchCount": "0",
+        "teardown": [
+            "$TC actions flush action psp"
+        ]
+    },
+    {
+        "id": "a744",
+        "name": "Add flower psp_spi filter with psp decap",
+        "category": [
+            "actions",
+            "psp",
+            "filter"
+        ],
+        "dependsOn": "$TC filter add flower help 2>&1 | grep -q psp_spi",
+        "plugins": {
+            "requires": "nsPlugin"
+        },
+        "setup": [
+            "$TC qdisc add dev $DEV1 ingress"
+        ],
+        "cmdUnderTest": "$TC filter add dev $DEV1 ingress protocol ip pref 1 flower psp_spi 0x1234 action psp decap",
+        "expExitCode": "0",
+        "verifyCmd": "$TC filter show dev $DEV1 ingress",
+        "matchPattern": "psp_spi 0x1234.*psp decap pipe",
+        "matchCount": "1",
+        "teardown": [
+            "$TC qdisc del dev $DEV1 ingress"
+        ]
+    },
+    {
+        "id": "be4e",
+        "name": "Add flower psp_spi filter with mask",
+        "category": [
+            "actions",
+            "psp",
+            "filter"
+        ],
+        "dependsOn": "$TC filter add flower help 2>&1 | grep -q psp_spi",
+        "plugins": {
+            "requires": "nsPlugin"
+        },
+        "setup": [
+            "$TC qdisc add dev $DEV1 ingress"
+        ],
+        "cmdUnderTest": "$TC filter add dev $DEV1 ingress protocol ipv6 pref 1 flower psp_spi 0x80001234/0x8000ffff action drop",
+        "expExitCode": "0",
+        "verifyCmd": "$TC filter show dev $DEV1 ingress",
+        "matchPattern": "psp_spi 0x80001234/0x8000ffff",
+        "matchCount": "1",
+        "teardown": [
+            "$TC qdisc del dev $DEV1 ingress"
+        ]
+    },
+    {
+        "id": "4e1f",
+        "name": "Add flower psp_spi, psp_ver and psp_dev filter with psp decap",
+        "category": [
+            "actions",
+            "psp",
+            "filter"
+        ],
+        "dependsOn": "$TC filter add flower help 2>&1 | grep -q psp_spi",
+        "plugins": {
+            "requires": "nsPlugin"
+        },
+        "setup": [
+            "$TC qdisc add dev $DEV1 ingress"
+        ],
+        "cmdUnderTest": "$TC filter add dev $DEV1 ingress protocol ip pref 1 flower psp_spi 0x1234 psp_ver 1 psp_dev 7 action psp decap",
+        "expExitCode": "0",
+        "verifyCmd": "$TC filter show dev $DEV1 ingress",
+        "matchPattern": "psp_spi 0x1234.*psp_ver 1.*psp_dev 7.*psp decap pipe",
+        "matchCount": "1",
+        "teardown": [
+            "$TC qdisc del dev $DEV1 ingress"
+        ]
+    },
+    {
+        "id": "7c3a",
+        "name": "Add flower psp_ver 0 filter",
+        "category": [
+            "actions",
+            "psp",
+            "filter"
+        ],
+        "dependsOn": "$TC filter add flower help 2>&1 | grep -q psp_spi",
+        "plugins": {
+            "requires": "nsPlugin"
+        },
+        "setup": [
+            "$TC qdisc add dev $DEV1 ingress"
+        ],
+        "cmdUnderTest": "$TC filter add dev $DEV1 ingress protocol ipv6 pref 1 flower psp_ver 0 action drop",
+        "expExitCode": "0",
+        "verifyCmd": "$TC filter show dev $DEV1 ingress",
+        "matchPattern": "psp_ver 0",
+        "matchCount": "1",
+        "teardown": [
+            "$TC qdisc del dev $DEV1 ingress"
+        ]
+    },
+    {
+        "id": "b58d",
+        "name": "Add flower psp_ver filter with an invalid version",
+        "category": [
+            "actions",
+            "psp",
+            "filter"
+        ],
+        "dependsOn": "$TC filter add flower help 2>&1 | grep -q psp_spi",
+        "plugins": {
+            "requires": "nsPlugin"
+        },
+        "setup": [
+            "$TC qdisc add dev $DEV1 ingress"
+        ],
+        "cmdUnderTest": "$TC filter add dev $DEV1 ingress protocol ip pref 1 flower psp_ver 16 action drop",
+        "expExitCode": "2",
+        "verifyCmd": "$TC filter show dev $DEV1 ingress",
+        "matchPattern": "psp_ver",
+        "matchCount": "0",
+        "teardown": [
+            "$TC qdisc del dev $DEV1 ingress"
+        ]
+    },
+    {
+        "id": "2f96",
+        "name": "Add flower psp_dev filter with an invalid device",
+        "category": [
+            "actions",
+            "psp",
+            "filter"
+        ],
+        "dependsOn": "$TC filter add flower help 2>&1 | grep -q psp_spi",
+        "plugins": {
+            "requires": "nsPlugin"
+        },
+        "setup": [
+            "$TC qdisc add dev $DEV1 ingress"
+        ],
+        "cmdUnderTest": "$TC filter add dev $DEV1 ingress protocol ip pref 1 flower psp_dev 65536 action drop",
+        "expExitCode": "2",
+        "verifyCmd": "$TC filter show dev $DEV1 ingress",
+        "matchPattern": "psp_dev",
+        "matchCount": "0",
+        "teardown": [
+            "$TC qdisc del dev $DEV1 ingress"
+        ]
+    }
+]
