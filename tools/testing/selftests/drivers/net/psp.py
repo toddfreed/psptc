@@ -1183,6 +1183,26 @@ def assoc_sockless_tc(cfg):
         defer(tc, "action del action psp index 100").exec()
 
 
+def assoc_sockless_tc_tunnel(cfg):
+    """ Test the tunnel mode argument of the tc psp action """
+    _init_psp_dev(cfg)
+    _require_tc_psp(cfg)
+
+    _, tx = _sockless_assocs(cfg)
+
+    tc(f"action add action psp encap assoc {tx['id']} mode tunnel index 100")
+    defer(tc, "action del action psp index 100")
+    tc("action add action psp decap mode tunnel index 101")
+    defer(tc, "action del action psp index 101")
+
+    def get_act(index):
+        out = tc(f"actions get action psp index {index}", json=True)
+        return [x for x in out if "actions" in x][0]["actions"][0]
+
+    ksft_eq(get_act(100).get("mode"), "tunnel")
+    ksft_eq(get_act(101).get("mode"), "tunnel")
+
+
 @ksft_variants(_get_psp_ver_ip_variants())
 def data_tc_basic_send(cfg, version, ipver):
     """ Test data send with socket-less assocs and the tc psp action """
@@ -1276,6 +1296,27 @@ def data_tc_decap_match(cfg):
         # Once they match again, the retransmits get through
         decap_filter(match(spi, 0, dev))
         _wait_data_outq(s, 0)
+    _close_psp_conn(cfg, s)
+
+
+def data_tc_tunnel_sw(cfg):
+    """ Test tunnel mode encap drops in software """
+    _init_psp_dev(cfg)
+    _require_tc_psp(cfg)
+
+    ipver = cfg.addr_ipver
+    s, _, tx = _tc_psp_conn(cfg, 0, ipver)
+
+    # Only hardware offload implements tunnel mode
+    sport = s.getsockname()[1]
+    tc(f"filter replace dev {cfg.ifname} egress pref 10 handle 1 "
+       f"protocol {_tc_proto(ipver)} flower ip_proto tcp src_port {sport} "
+       f"action psp encap assoc {tx['id']} mode tunnel")
+
+    data_len = _send_careful(cfg, s, 1)
+    _check_data_outq(s, data_len, force_wait=True)
+    _check_data_rx(cfg, 0)
+    ksft_gt(_tc_action_stats(cfg, "egress")["drops"], 0)
     _close_psp_conn(cfg, s)
 
 
