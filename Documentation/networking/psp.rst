@@ -195,12 +195,21 @@ The ``psp`` tc action attaches these associations to packets:
   ``skb->decrypted``) of a decrypted packet, so that it can be forwarded. It
   takes no association. Its filter should match ``psp_spi``, ``psp_ver``
   and ``psp_dev``.
+- ``mode tunnel`` encrypts the whole IP packet and adds outer IPv6 or IPv4,
+  UDP and PSP headers, taken from a preceding ``tunnel_key set`` action.
+  Decap removes those headers. Tunnel mode is only implemented as hardware
+  offload; in software the action drops the packet.
+
+Encap on ingress and tunnel mode only run in hardware: rules which use them
+should be added with ``skip_sw``. Without it, a packet which the hardware
+leaves to software reaches the action there, which drops it.
 
 The flower classifier matches what a packet was decrypted with:
 ``psp_spi SPI[/MASK]``, ``psp_ver VERSION`` and ``psp_dev DEV_ID``, the
 ID of the PSP device which decrypted it. These never match a clear text
 packet, so ``psp_spi 0/0`` matches any packet decrypted with PSP.
-Together they tie a decap rule to one Rx association.
+Together they tie a decap rule to one Rx association. Drivers can
+offload them.
 
 Once the device key an SPI was created from has been rotated twice, that
 association is considered stale. Unlike sockets, tc does not handle key
@@ -210,6 +219,39 @@ The device adds 40 bytes to each packet on transmit: the UDP and PSP
 headers, and the ICV. The operator must size the MTU of the traffic
 source for this. A packet which would not fit the PSP device's MTU once
 encapsulated is dropped on transmit.
+
+Device modes
+~~~~~~~~~~~~
+
+What a device supports can depend on its mode. For example, mlx5 does PSP
+in the uplink's own flow tables in legacy mode, and in the eswitch in
+switchdev mode:
+
+======================================  ===========  ==============
+Use                                     legacy mode  switchdev mode
+======================================  ===========  ==============
+PSP sockets, Tx                         yes          yes
+PSP sockets, Rx                         yes          no
+tc transport mode, Tx                   yes          yes
+tc transport mode, Rx (decap)           yes          no
+tc transport mode, encap on ingress     no           no
+tc tunnel mode (offloaded, VF traffic)  no           yes
+======================================  ===========  ==============
+
+In switchdev mode, the eswitch encrypts and encapsulates the VFs' traffic,
+and decrypts and decapsulates the traffic for them, and it encrypts the
+host's own PSP packets on their way out of the uplink. It doesn't decrypt
+the PSP packets for the host: neither PSP sockets nor transport mode decap
+on the uplink receive PSP traffic. Tunnel mode is only implemented as
+hardware offload, which mlx5 does in switchdev mode. mlx5 offloads tunnel
+mode only: encap on ingress in transport mode, which also only runs in
+hardware, isn't available on it.
+
+On mlx5, the host can't send UDP to port 1000 unless it is PSP, in either
+mode, for as long as the PSP device exists: the device's PSP Tx rule
+matches the UDP destination port only, and the device drops the packets
+which it can't encrypt. In legacy mode they are counted in the device's
+tx-packets. In switchdev mode, eswitch IPsec never sees them either.
 
 Rotation notifications
 ----------------------
@@ -224,7 +266,8 @@ Fragments
 ---------
 
 PSP transport mode does not support IP fragments, either for sockets or
-socket-less associations.
+socket-less associations. Tunnel mode can carry fragments: a fragment,
+IPv4 or IPv6, is the payload of the new outer header.
 
 Statistics
 ----------
@@ -232,21 +275,23 @@ Statistics
 The ``get-stats`` netlink command reports the PSP device statistics:
 kernel statistics (key rotations, stale events), and the device statistics
 defined by the PSP specification. The device statistics count what the
-device decrypts and encrypts.
+device decrypts and encrypts, including tc tunnel mode offload.
 
 The tc action counts the packets it processes and the ones it drops
-(``tc -s``). Encapsulated packets dropped on transmit count in the
-device's ``tx_dropped``. Drops are reported with these drop reasons:
+(``tc -s``), including hardware counters for offloaded rules.
+Encapsulated packets dropped on transmit count in the device's
+``tx_dropped``. Drops are reported with these drop reasons:
 
-- ``SKB_DROP_REASON_PSP_OUTPUT``: encap ran on ingress in software, or
-  failed to parse the packet, or it is an IPv4 fragment or has IPv6
-  extension headers, which transport mode doesn't support, or it is
-  already encapsulated for a tunnel, already marked decrypted, or of a
-  socket with its own encryption offload; or an encapsulated packet
-  reached a device which isn't its PSP device's netdev, or its PSP
-  device was unregistered while it was queued.
+- ``SKB_DROP_REASON_PSP_OUTPUT``: encap ran on ingress, or in tunnel
+  mode, in software; or it failed to parse the packet, or the packet is
+  an IPv4 fragment or has IPv6 extension headers, which transport mode
+  doesn't support, or it is already encapsulated for a tunnel, already
+  marked decrypted, or of a socket with its own encryption offload; or
+  an encapsulated packet reached a device which isn't its PSP device's
+  netdev, or its PSP device was unregistered while it was queued.
 - ``SKB_DROP_REASON_PKT_TOO_BIG``: an encapsulated packet would not fit
   the device's MTU once the device adds the PSP encapsulation.
+- ``SKB_DROP_REASON_PSP_INPUT``: decap in tunnel mode in software.
 
 A packet encapsulated on egress which lost its association on the way is
 dropped on transmit by ``sk_validate_xmit_skb()``, without a specific drop
@@ -285,6 +330,12 @@ or, for socket-less associations, from a ``METADATA_PSP`` dst which the
 core keeps on the skb for the driver to use. On Rx drivers should
 allocate and populate the ``SKB_EXT_PSP`` skb extension, and set the
 ``skb->decrypted`` bit to 1.
+
+Drivers which offload tc tunnel mode should count the packets they
+encrypt and decrypt for it in the device Tx and Rx statistics. The
+statistics must be cumulative: they must not restart when the driver
+frees its encryption or decryption state, for example when the last
+encap or decap rule is removed.
 
 Kernel implementation notes
 ---------------------------
