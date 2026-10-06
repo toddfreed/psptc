@@ -69,20 +69,43 @@ The PSP netlink family defines operations to retrieve information
 about the PSP devices available on the system, configure them and
 access PSP related statistics.
 
-Securing a connection
----------------------
+PSP Associations
+----------------
 
-PSP encryption is currently only supported for TCP connections.
-Rx and Tx keys are allocated separately. First the ``rx-assoc``
-Netlink command needs to be issued, specifying a target TCP socket.
-Kernel will allocate a new PSP Rx key from the NIC and associate it
-with given socket. At this stage socket will accept both PSP-secured
-and plain text TCP packets.
+PSP encryption and decryption happen in the context of an association.
+An association holds the PSP device, PSP version, and either Rx state
+for decrypting and authenticating packets (the SPI and Rx key), a Tx key
+for encrypting packets, or both.
 
-Tx keys are installed using the ``tx-assoc`` Netlink command.
-Once the Tx keys are installed, all data read from the socket will
-be PSP-secured. In other words act of installing Tx keys has a secondary
-effect on the Rx direction.
+Associations are used in two ways. First, a TCP socket can be bound to
+an association, and all packets flowing over that socket inherit its
+association. Second, socket-less Tx associations are used with tc,
+together with Rx SPIs allocated without a socket. This allows PSP for
+forwarded traffic, or for non-TCP traffic. A tc action attaches a Tx
+association to packets. On Rx, the device decrypts packets sent to an
+SPI it allocated, and a tc filter matches the SPI, version and PSP
+device a packet was decrypted with. The kernel keeps no state for
+socket-less Rx.
+
+An association is of one type or the other; that is, sockets may not
+use socket-less associations, and tc actions do not address associations
+which are attached to a socket. Device statistics count both.
+
+Securing a socket connection
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+PSP encryption can be enabled for TCP sockets. Other kinds of sockets
+are not supported. For a TCP socket, Rx and Tx keys are allocated
+separately. First the ``rx-assoc`` Netlink command needs to be issued,
+specifying a target TCP socket. Kernel will allocate a new PSP Rx key
+from the NIC, create an association with it, and bind it to the given
+socket. At this stage socket will accept both PSP-secured and plain text
+TCP packets.
+
+The Tx key is installed into the socket's association with the
+``tx-assoc`` Netlink command. Once it is installed, all data read from
+the socket will be PSP-secured. In other words act of installing Tx keys
+has a secondary effect on the Rx direction.
 
 There is an intermediate period after ``tx-assoc`` successfully
 returns and before the TCP socket encounters it's first PSP
@@ -141,7 +164,7 @@ torn down. ``connect()`` on a socket that has PSP assoc state will
 return ``-EINVAL``.
 
 Rekeying
---------
+~~~~~~~~
 
 A connection which has completed the exchange described above and is
 in the "PSP Full" state can be rekeyed in place without being torn
@@ -162,6 +185,92 @@ or the PSP version of the association. It is rejected with ``-EBUSY``
 if the socket has not completed its initial exchange in both
 directions.
 
+Socket-less associations
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+Socket-less PSP is managed with these netlink commands:
+
+- ``rx-spi-alloc`` allocates an Rx SPI and key, like ``rx-assoc`` but
+  without a socket, and creates no association. It also returns
+  ``key-rotations``, the number of key rotations of the PSP device so
+  far. The key should be passed to the peer out of band, and installed
+  with ``assoc-add``.
+- ``assoc-add`` adds a Tx association with the peer's SPI and key, and
+  returns its ID.
+- ``assoc-del`` deletes a Tx association. tc actions and packets which
+  still reference it keep it alive.
+- ``assoc-get`` reports Tx associations, never their keys.
+
+Tx associations are removed when their PSP device is unregistered.
+
+The ``psp`` tc action attaches these associations to packets:
+
+- ``psp encap assoc ID`` attaches a Tx association. The packet must then
+  be transmitted on the main netdev of the association's PSP device, which
+  encrypts it (``mirred egress redirect``). If it is transmitted on any
+  other device, or the PSP device is unregistered before transmit, it is
+  dropped, rather than sent in the clear. So is a packet which loses the
+  association on the way (e.g. its dst is replaced), unless its socket
+  gained an encryption offload of its own (see Statistics). Encap on
+  ingress, and redirect to ingress after encap, are not supported. Encap
+  on ingress drops the packet. A packet redirected to ingress after encap
+  loses its association: it is dropped if it is forwarded, but delivered
+  locally with ``skb->decrypted`` still set.
+
+- ``psp decap`` removes the PSP Rx state (the ``SKB_EXT_PSP`` extension and
+  ``skb->decrypted``) of a decrypted packet, so that it can be forwarded. It
+  takes no association. Its filter should match ``psp_spi``, ``psp_ver``
+  and ``psp_dev``.
+
+The flower classifier matches what a packet was decrypted with:
+``psp_spi SPI[/MASK]``, ``psp_ver VERSION`` and ``psp_dev DEV_ID``, the
+ID of the PSP device which decrypted it. These never match a clear text
+packet, so ``psp_spi 0/0`` matches any packet decrypted with PSP.
+Together they tie a decap rule to one Rx SPI.
+
+The top bit of an SPI, the key phase, selects which of the two device
+keys its Rx key is derived from. A key rotation replaces the device key
+of the other phase than the SPIs allocated since the previous rotation,
+and the SPIs allocated after it have that phase. An SPI keeps decrypting
+through one rotation, which leaves time to move peers to new SPIs. After
+the second rotation its device key is gone, and the device may allocate
+the same SPI again, with a new key.
+
+Unlike for sockets, the kernel does not enforce key rotation for
+socket-less Rx: a decap rule for an SPI also takes the packets of a later
+allocation of the same SPI. Userspace which installs decap rules is
+responsible for removing them in time:
+
+- Any process with ``CAP_NET_ADMIN`` over the PSP device can rotate its
+  key, or allocate SPIs with ``rx-spi-alloc``. Any process with a TCP
+  socket in a network namespace where the device is visible can allocate
+  SPIs from the same space with ``rx-assoc``. Once the device has rotated
+  twice, either can return an SPI which a stale decap rule still
+  matches, and the rule would strip the PSP state of its new owner's
+  packets. Remove the decap rules of the SPIs allocated before the
+  previous rotation before rotating the key again: right after that
+  rotation, the device may allocate their SPIs again. When another
+  process rotates the key, remove them as soon as the rotation happens
+  (``key-rotate-ntf``); until then, an SPI allocated again can be matched
+  by a stale rule. This is simplest when one process allocates the
+  socket-less SPIs, owns the decap rules and rotates the key. Move peers
+  to new SPIs before the next rotation.
+- An SPI allocated when ``key-rotations`` was N stops decrypting with
+  rotation N + 2. Comparing it with the ``key-rotations`` of a later
+  ``rx-spi-alloc``, or of ``get-stats``, detects missed notifications.
+
+tc can help with this bookkeeping. A tc action cookie (``cookie``, up to
+16 bytes) is opaque to the kernel and dumped with the action, so it can
+record the owner of a decap rule, its SPI and its ``key-rotations``.
+Filters added with a known priority and handle can be deleted without a
+dump. Putting the decap rules of each key phase in their own chain lets
+one command remove all of them on rotation.
+
+The device adds 40 bytes to each packet on transmit: the UDP and PSP
+headers, and the ICV. The operator must size the MTU of the traffic
+source for this. A packet which would not fit the PSP device's MTU once
+encapsulated is dropped on transmit.
+
 Rotation notifications
 ----------------------
 
@@ -170,6 +279,41 @@ performed by management daemons, not under application control.
 The PSP netlink family will generate a notification whenever keys
 are rotated. Applications are expected to rekey their connections,
 as described above, before device keys are rotated again.
+
+Fragments
+---------
+
+PSP transport mode does not support IP fragments, either for sockets or
+socket-less associations.
+
+Statistics
+----------
+
+The ``get-stats`` netlink command reports the PSP device statistics:
+kernel statistics (key rotations, stale events), and the device statistics
+defined by the PSP specification. The device statistics count what the
+device decrypts and encrypts.
+
+The tc action counts the packets it processes and the ones it drops
+(``tc -s``). Encapsulated packets dropped on transmit count in the
+``tx_dropped`` of the netdev they were transmitted on. Drops are reported
+with these drop reasons:
+
+- ``SKB_DROP_REASON_PSP_OUTPUT``: encap ran on ingress, or failed to
+  parse the packet, or it is an IPv4 fragment or has IPv6
+  extension headers, which transport mode doesn't support, or it is
+  already encapsulated for a tunnel, already marked decrypted, or of a
+  socket with its own encryption offload; or an encapsulated packet
+  reached a device which isn't its PSP device's netdev, or its PSP
+  device was unregistered while it was queued, or its socket gained an
+  encryption offload of its own while it was queued.
+- ``SKB_DROP_REASON_PKT_TOO_BIG``: an encapsulated packet would not fit
+  the device's MTU once the device adds the PSP encapsulation.
+
+A packet encapsulated on egress which lost its association on the way is
+dropped on transmit by ``sk_validate_xmit_skb()``, without a specific drop
+reason, unless its socket has an encryption offload of its own: then the
+socket's validator handles it.
 
 Kernel implementation
 =====================
@@ -199,8 +343,11 @@ device key twice), to avoid potentially using a SPI+key which previous
 OS instance already had access to.
 
 Drivers must use ``psp_skb_get_assoc_rcu()`` to check if PSP Tx offload
-was requested for given skb. On Rx drivers should allocate and populate
-the ``SKB_EXT_PSP`` skb extension, and set the skb->decrypted bit to 1.
+was requested for given skb. The association comes from the skb's socket
+or, for socket-less associations, from a ``METADATA_PSP`` dst which the
+core keeps on the skb for the driver to use. On Rx drivers should
+allocate and populate the ``SKB_EXT_PSP`` skb extension, and set the
+``skb->decrypted`` bit to 1.
 
 Deferred Tx key deletion
 ~~~~~~~~~~~~~~~~~~~~~~~~
@@ -248,7 +395,8 @@ Kernel implementation notes
 ---------------------------
 
 PSP implementation follows the TLS offload more closely than the IPsec
-offload, with per-socket state, and the use of skb->decrypted to prevent
+offload, with per-socket state (or per-association state, for
+socket-less associations), and the use of ``skb->decrypted`` to prevent
 clear text leaks.
 
 PSP device is separate from netdev, to make it possible to "delegate"
