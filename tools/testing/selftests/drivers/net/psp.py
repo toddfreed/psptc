@@ -22,7 +22,7 @@ from lib.py import ksft_variants, KsftNamedVariant
 from lib.py import KsftSkipEx, KsftFailEx, CmdExitFailure
 from lib.py import NetDrvEpEnv, NetDrvContEnv
 from lib.py import Netlink, NlError, PSPFamily, RtnlFamily
-from lib.py import NetNSEnter
+from lib.py import NetNS, NetNSEnter
 from lib.py import bkg, rand_port, wait_port_listen
 from lib.py import cmd, ip, tc
 
@@ -1484,6 +1484,160 @@ def data_tc_encap_ingress(cfg):
             del_flt.exec()
 
 
+def _tc_act_stats(dev, pref, host=None):
+    """ Stats of the first action of the ingress filter @pref of @dev """
+    filters = tc(f"-s filter show dev {dev} ingress pref {pref}",
+                 json=True, host=host)
+    for flt in filters:
+        for act in flt.get("options", {}).get("actions", []):
+            return act["stats"]
+    raise KsftFailEx(f"no action on the {dev} pref {pref} filter")
+
+
+def _tc_act_pkts(dev, pref, host=None):
+    """ Packets of the first action of the ingress filter @pref of @dev """
+    return _tc_act_stats(dev, pref, host)["packets"]
+
+
+def _fwd_client(cfg, ipver):
+    """
+    Set up a client in a netns behind veth psp-fwd0, and forward its
+    traffic: only from psp-fwd0, the host's own forwarding settings stay as
+    they are. Return a UDP socket of the client.
+    """
+    ns = NetNS()
+    defer(ns.__del__)
+    ip(f"link add psp-fwd0 type veth peer name psp-fwd1 netns {ns.name}")
+    defer(ip, "link del psp-fwd0")
+    if ipver == "4":
+        fwd = "/proc/sys/net/ipv4/conf/psp-fwd0/forwarding"
+        local, client, plen = "198.51.100.1", "198.51.100.2", 24
+    else:
+        fwd = "/proc/sys/net/ipv6/conf/psp-fwd0/force_forwarding"
+        local, client, plen = "2001:db8:fe::1", "2001:db8:fe::2", 64
+    if not os.path.exists(fwd):
+        raise KsftSkipEx(f"{fwd} not supported")
+    # Goes away with the device
+    with open(fwd, "w", encoding="utf-8") as fp:
+        fp.write("1")
+    # IPv6 may be disabled on new devices
+    if cmd(f"ip addr add {local}/{plen} dev psp-fwd0 nodad",
+           fail=False).ret:
+        raise KsftSkipEx(f"can't add {local} to a new device")
+    ip("link set psp-fwd0 up")
+    ip(f"-n {ns.name} addr add {client}/{plen} dev psp-fwd1 nodad")
+    ip(f"-n {ns.name} link set psp-fwd1 up")
+    ip(f"-n {ns.name} route add default via {local}")
+
+    family = socket.AF_INET if ipver == "4" else socket.AF_INET6
+    with NetNSEnter(ns.name):
+        s = socket.socket(family, socket.SOCK_DGRAM)
+    defer(s.close)
+    return s
+
+
+def _remote_filter(cfg, pref, proto, match):
+    """
+    Add a flower filter on the remote's ingress, to count what gets there.
+    In software only: drivers refresh the counters of offloaded filters
+    periodically, and these counts must be exact.
+    """
+    _tc_clsact(cfg.remote_ifname, host=cfg.remote)
+    tc(f"filter add dev {cfg.remote_ifname} ingress pref {pref} handle 1 "
+       f"protocol {proto} flower skip_hw {match}", host=cfg.remote)
+    defer(tc, f"filter del dev {cfg.remote_ifname} ingress pref {pref} "
+          f"handle 1 protocol {proto} flower", host=cfg.remote)
+
+
+def _tc_encap_ingress(proto, port, tx):
+    """ psp encap on psp-fwd0's ingress, which software drops """
+    _tc_clsact("psp-fwd0")
+    tc(f"filter add dev psp-fwd0 ingress pref 10 protocol {proto} "
+       f"flower ip_proto udp dst_port {port} "
+       f"action psp encap assoc {tx['id']}")
+
+
+@ksft_variants(_get_ip_variants())
+def data_tc_encap_routed(cfg, ipver):
+    """ Test software encap on ingress drops routed packets """
+    cfg.require_ipver(ipver)
+    _init_psp_dev(cfg)
+    _require_tc_psp(cfg)
+
+    proto = _tc_proto(ipver)
+    _, tx = _sockless_assocs(cfg)
+    s = _fwd_client(cfg, ipver)
+
+    port = rand_port(socket.SOCK_DGRAM)
+    _remote_filter(cfg, 10, proto,
+                   f"ip_proto udp dst_port {port} action drop")
+
+    def remote_pkts():
+        return _tc_act_pkts(cfg.remote_ifname, 10, host=cfg.remote)
+
+    def send(n):
+        for _ in range(n):
+            s.sendto(b'0123456789', (cfg.remote_addr_v[ipver], port))
+            time.sleep(0.01)
+        time.sleep(0.2)
+
+    # Without encap the packets are forwarded to the remote, unless
+    # something else, e.g. a FORWARD policy, stops them
+    send(10)
+    sent = remote_pkts()
+    if not sent:
+        raise KsftSkipEx("forwarded packets don't reach the remote")
+
+    # Encap on ingress is hardware offload only: in software the action
+    # drops the packets. They must not reach the remote in clear text.
+    _tc_encap_ingress(proto, port, tx)
+    send(10)
+    ksft_eq(_tc_act_pkts("psp-fwd0", 10), 10)
+    ksft_eq(_tc_act_stats("psp-fwd0", 10)["drops"], 10,
+            comment="dropped by encap")
+    ksft_eq(remote_pkts(), sent)
+
+
+@ksft_variants(_get_ip_variants())
+def data_tc_encap_local(cfg, ipver):
+    """ Test software encap on ingress drops packets to a local address """
+    cfg.require_ipver(ipver)
+    _init_psp_dev(cfg)
+    _require_tc_psp(cfg)
+
+    _, tx = _sockless_assocs(cfg)
+    s = _fwd_client(cfg, ipver)
+    fam = "inet" if ipver == "4" else "inet6"
+    addrs = ip("addr show dev psp-fwd0", json=True)[0]["addr_info"]
+    local = [a["local"] for a in addrs
+             if a["family"] == fam and a["scope"] == "global"][0]
+
+    family = socket.AF_INET if ipver == "4" else socket.AF_INET6
+    with socket.socket(family, socket.SOCK_DGRAM) as srv:
+        srv.bind((local, 0))
+        srv.settimeout(0.5)
+        port = srv.getsockname()[1]
+
+        # Without encap the packets are delivered, unless something
+        # else, e.g. an INPUT policy, stops them
+        s.sendto(b'clear', (local, port))
+        try:
+            got = srv.recv(64)
+        except socket.timeout as e:
+            raise KsftSkipEx("the client's packets aren't delivered") from e
+        ksft_eq(got, b'clear')
+
+        # Encap on ingress is hardware offload only: in software the
+        # action drops the packets, rather than let them be received
+        _tc_encap_ingress(_tc_proto(ipver), port, tx)
+        s.sendto(b'encap', (local, port))
+        with ksft_raises(socket.timeout):
+            srv.recv(64)
+        ksft_eq(_tc_act_pkts("psp-fwd0", 10), 1)
+        ksft_eq(_tc_act_stats("psp-fwd0", 10)["drops"], 1,
+                comment="dropped by encap")
+
+
 def removal_device_tc(cfg):
     """ Test removing a PSD with tc actions holding its assocs """
     cfg.require_nsim()
@@ -2003,7 +2157,8 @@ def main() -> None:
                                                          timeout=1)
 
                 cases = [data_basic_send, data_mss_adjust,
-                         data_send_ipv6_exthdr, data_tc_basic_send]
+                         data_send_ipv6_exthdr, data_tc_basic_send,
+                         data_tc_encap_routed, data_tc_encap_local]
 
                 if has_cont:
                     cases += [
