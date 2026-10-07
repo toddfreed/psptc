@@ -318,6 +318,8 @@ struct mlx5_esw_offload {
 	struct mlx5_flow_group *vport_rx_drop_group;
 	struct mlx5_flow_handle *vport_rx_drop_rule;
 	struct mlx5_flow_table *ft_ipsec_tx_pol;
+	/* PSP host Tx in switchdev, see en_accel/psp_fdb.c */
+	struct mlx5_flow_table *ft_psp_host_tx;
 	struct xarray vport_reps;
 	struct xarray peer_flows;
 	struct mutex peer_mutex;

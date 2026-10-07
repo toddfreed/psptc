@@ -21,9 +21,15 @@ bool mlx5_lag_shared_fdb_supported_filter(struct mlx5_lag *ldev, u32 filter)
 
 	dev0 = mlx5_lag_fn(ldev, idx)->dev;
 	mlx5_lag_for_each(i, 0, ldev, filter) {
+		dev = mlx5_lag_fn(ldev, i)->dev;
+		/* With a shared FDB, the host Tx of the other ports doesn't
+		 * reach their PSP host Tx table: PSP packets would leave
+		 * unencrypted.
+		 */
+		if (dev->priv.eswitch->offloads.ft_psp_host_tx)
+			return false;
 		if (i == idx)
 			continue;
-		dev = mlx5_lag_fn(ldev, i)->dev;
 		if (is_mdev_switchdev_mode(dev) &&
 		    mlx5_eswitch_vport_match_metadata_enabled(dev->priv.eswitch) &&
 		    MLX5_CAP_GEN(dev, lag_native_fdb_selection) &&

@@ -1040,7 +1040,15 @@ mlx5_eswitch_add_send_to_vport_rule(struct mlx5_eswitch *on_esw,
 	flow_act.action = MLX5_FLOW_CONTEXT_ACTION_FWD_DEST;
 
 	if (rep->vport == MLX5_VPORT_UPLINK &&
-	    on_esw == from_esw && on_esw->offloads.ft_ipsec_tx_pol) {
+	    on_esw == from_esw && on_esw->offloads.ft_psp_host_tx) {
+		/* PSP host Tx: encrypts what the driver prepared for PSP and
+		 * forwards everything else to ft_ipsec_tx_pol, if set.
+		 */
+		dest.ft = on_esw->offloads.ft_psp_host_tx;
+		flow_act.flags = FLOW_ACT_IGNORE_FLOW_LEVEL;
+		dest.type = MLX5_FLOW_DESTINATION_TYPE_FLOW_TABLE;
+	} else if (rep->vport == MLX5_VPORT_UPLINK &&
+		   on_esw == from_esw && on_esw->offloads.ft_ipsec_tx_pol) {
 		dest.ft = on_esw->offloads.ft_ipsec_tx_pol;
 		flow_act.flags = FLOW_ACT_IGNORE_FLOW_LEVEL;
 		dest.type = MLX5_FLOW_DESTINATION_TYPE_FLOW_TABLE;

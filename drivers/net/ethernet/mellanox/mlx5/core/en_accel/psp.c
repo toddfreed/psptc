@@ -1104,8 +1104,18 @@ int mlx5e_psp_init_switchdev(struct mlx5e_priv *priv)
 	if (err) {
 		priv->psp = NULL;
 		mlx5e_psp_free(psp);
+		return err;
 	}
-	return err;
+
+	/* Without it the host's own PSP Tx is dropped. With a shared FDB
+	 * LAG, the host Tx of the other port wouldn't reach its table, and
+	 * the LAG doesn't share its FDB while one exists.
+	 */
+	if (mlx5_lag_is_shared_fdb(mdev))
+		mlx5_core_info(mdev, "PSP: no host Tx in switchdev mode with a shared FDB LAG\n");
+	else if (mlx5e_psp_fdb_host_tx_create(priv))
+		mlx5_core_info(mdev, "PSP: host Tx in switchdev mode not available\n");
+	return 0;
 }
 
 void mlx5e_psp_free(struct mlx5e_psp *psp)
@@ -1122,6 +1132,7 @@ void mlx5e_psp_cleanup_switchdev(struct mlx5e_priv *priv)
 	if (!psp)
 		return;
 
+	mlx5e_psp_fdb_host_tx_destroy(priv);
 	mlx5e_psp_unregister(priv);
 	WARN_ON(atomic_read(&psp->tx_key_cnt));
 	priv->psp = NULL;
