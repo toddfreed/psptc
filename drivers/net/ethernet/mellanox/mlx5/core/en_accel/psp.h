@@ -34,6 +34,7 @@ struct mlx5e_psp {
 	struct mlx5e_psp_stats fdb_rx_stats;
 	struct mlx5e_psp_fdb_rx *fdb_rx;
 	struct mlx5e_psp_fdb_tx *fdb_tx;
+	struct mlx5e_psp_fdb_host_tx *fdb_host_tx;
 };
 
 static inline bool mlx5_is_psp_device(struct mlx5_core_dev *mdev)
@@ -65,9 +66,20 @@ int mlx5e_psp_fdb_rx_get(struct mlx5e_priv *priv);
 void mlx5e_psp_fdb_rx_put(struct mlx5e_priv *priv);
 struct mlx5_flow_table *mlx5e_psp_fdb_tx_get(struct mlx5e_priv *priv);
 void mlx5e_psp_fdb_tx_put(struct mlx5e_priv *priv);
+int mlx5e_psp_fdb_host_tx_create(struct mlx5e_priv *priv);
+void mlx5e_psp_fdb_host_tx_destroy(struct mlx5e_priv *priv);
+void mlx5e_psp_fdb_host_tx_update_next(struct mlx5_core_dev *mdev);
 void mlx5e_psp_fdb_rx_get_stats(struct mlx5e_priv *priv,
 				struct mlx5e_psp_stats *stats);
 #else
+static inline int mlx5e_psp_fdb_host_tx_create(struct mlx5e_priv *priv)
+{
+	return -EOPNOTSUPP;
+}
+
+static inline void mlx5e_psp_fdb_host_tx_destroy(struct mlx5e_priv *priv) { }
+static inline void
+mlx5e_psp_fdb_host_tx_update_next(struct mlx5_core_dev *mdev) { }
 static inline void mlx5e_psp_fdb_rx_get_stats(struct mlx5e_priv *priv,
 					      struct mlx5e_psp_stats *stats) { }
 #endif
@@ -85,5 +97,7 @@ static inline int mlx5e_psp_init(struct mlx5e_priv *priv) { return 0; }
 static inline void mlx5e_psp_cleanup(struct mlx5e_priv *priv) { }
 static inline int mlx5e_psp_init_switchdev(struct mlx5e_priv *priv) { return 0; }
 static inline void mlx5e_psp_cleanup_switchdev(struct mlx5e_priv *priv) { }
+static inline void
+mlx5e_psp_fdb_host_tx_update_next(struct mlx5_core_dev *mdev) { }
 #endif /* CONFIG_MLX5_EN_PSP */
 #endif /* __MLX5E_ACCEL_PSP_H__ */

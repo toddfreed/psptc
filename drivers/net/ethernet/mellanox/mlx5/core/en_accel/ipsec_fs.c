@@ -11,6 +11,7 @@
 #include "lib/fs_chains.h"
 #include "esw/ipsec_fs.h"
 #include "en_rep.h"
+#include "en_accel/psp.h"
 
 #define NUM_IPSEC_FTE BIT(15)
 #define MLX5_REFORMAT_TYPE_ADD_ESP_TRANSPORT_SIZE 16
@@ -1398,6 +1399,8 @@ static void ipsec_esw_tx_ft_policy_set(struct mlx5_core_dev *mdev,
 	struct mlx5e_priv *priv;
 
 	esw->offloads.ft_ipsec_tx_pol = ft;
+	/* PSP's host Tx table, if any, forwards what it doesn't encrypt here */
+	mlx5e_psp_fdb_host_tx_update_next(mdev);
 	uplink_rpriv = mlx5_eswitch_get_uplink_priv(esw, REP_ETH);
 	priv = netdev_priv(uplink_rpriv->netdev);
 	if (!priv->channels.num)

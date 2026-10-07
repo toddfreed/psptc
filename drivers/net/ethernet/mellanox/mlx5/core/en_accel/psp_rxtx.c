@@ -170,8 +170,12 @@ bool mlx5e_psp_handle_tx_skb(struct net_device *netdev,
 	if (!mlx5e_psp_set_state(priv, skb, psp_st))
 		return true;
 
-	/* In switchdev mode there are no NIC Tx tables to encrypt it */
-	if (unlikely(!priv->psp->fs)) {
+	/* In switchdev mode there are no NIC Tx tables: the FDB host Tx
+	 * table encrypts it, if there is one, with the key id in the WQE
+	 * metadata. Don't let a key id of 0, i.e. no metadata, through.
+	 */
+	if (unlikely(!priv->psp->fs &&
+		     (!priv->psp->fdb_host_tx || !psp_st->keyid))) {
 		kfree_skb_reason(skb, SKB_DROP_REASON_PSP_OUTPUT);
 		atomic_inc(&priv->psp->tx_drop);
 		return false;

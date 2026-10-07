@@ -23,6 +23,7 @@
 #include "eswitch.h"
 #include "lib/fs_chains.h"
 #include "en.h"
+#include "en_rep.h"
 #include "en_accel/psp.h"
 
 enum {
@@ -30,8 +31,11 @@ enum {
 	MLX5E_PSP_FDB_RX_CHK_FT_LEVEL,
 };
 
-/* In FDB_CRYPTO_EGRESS, next to the IPsec Tx policy table */
+/* In FDB_CRYPTO_EGRESS, next to the IPsec Tx tables. The host Tx table
+ * forwards to the Tx counting table, which must be at a higher level.
+ */
 enum {
+	MLX5E_PSP_FDB_HOST_TX_FT_LEVEL,
 	MLX5E_PSP_FDB_TX_FT_LEVEL,
 };
 
@@ -510,6 +514,198 @@ void mlx5e_psp_fdb_tx_put(struct mlx5e_priv *priv)
 		psp->fdb_tx = NULL;
 	}
 	mutex_unlock(&psp->fdb_rx_lock);
+}
+
+/* Host PSP Tx in switchdev mode, the FDB counterpart of the NIC Tx table of
+ * legacy mode. Like eswitch IPsec, the uplink representor's send-to-vport rule
+ * forwards here (eswitch_offloads.c). For a PSP packet the driver has already
+ * inserted the UDP + PSP headers and put the key object id, never 0, in the
+ * WQE metadata, which CRYPTO_ENCRYPT without an object id uses, as in NIC
+ * mode. The FDB can't match the metadata (metadata_reg_a), so like the NIC
+ * Tx table this matches UDP dport 1000. Everything else goes on to the
+ * eswitch IPsec Tx tables, if there are any, or to the uplink:
+ *
+ *   host tx table (FDB_CRYPTO_EGRESS)
+ *     UDP dport 1000 -> encrypt, tx counting table
+ *     miss           -> the IPsec Tx policy table, or the uplink
+ */
+struct mlx5e_psp_fdb_host_tx {
+	struct mlx5_flow_table *ft;
+	struct mlx5_flow_group *miss_group;
+	struct mlx5_flow_handle *miss_rule;
+	struct mlx5_flow_handle *rule;
+	struct mlx5_flow_table *tx_ft;	/* referenced */
+	struct mlx5_flow_destination next;
+};
+
+static void psp_fdb_host_tx_next(struct mlx5_eswitch *esw,
+				 struct mlx5_flow_destination *dest)
+{
+	struct mlx5_core_dev *mdev = esw->dev;
+
+	memset(dest, 0, sizeof(*dest));
+	if (esw->offloads.ft_ipsec_tx_pol) {
+		dest->type = MLX5_FLOW_DESTINATION_TYPE_FLOW_TABLE;
+		dest->ft = esw->offloads.ft_ipsec_tx_pol;
+		return;
+	}
+	dest->type = MLX5_FLOW_DESTINATION_TYPE_VPORT;
+	dest->vport.num = MLX5_VPORT_UPLINK;
+	if (MLX5_CAP_ESW(mdev, merged_eswitch)) {
+		dest->vport.vhca_id = MLX5_CAP_GEN(mdev, vhca_id);
+		dest->vport.flags |= MLX5_FLOW_DEST_VPORT_VHCA_ID;
+	}
+}
+
+static void psp_fdb_host_tx_free(struct mlx5e_priv *priv,
+				 struct mlx5e_psp_fdb_host_tx *htx)
+{
+	if (!IS_ERR_OR_NULL(htx->rule))
+		mlx5_del_flow_rules(htx->rule);
+	if (!IS_ERR_OR_NULL(htx->miss_rule)) {
+		mlx5_del_flow_rules(htx->miss_rule);
+		mlx5_destroy_flow_group(htx->miss_group);
+	}
+	if (!IS_ERR_OR_NULL(htx->ft))
+		mlx5_destroy_flow_table(htx->ft);
+	if (!IS_ERR_OR_NULL(htx->tx_ft))
+		mlx5e_psp_fdb_tx_put(priv);
+	kfree(htx);
+}
+
+/* priv is the uplink's. Called before its send queues exist. */
+int mlx5e_psp_fdb_host_tx_create(struct mlx5e_priv *priv)
+{
+	struct mlx5_eswitch *esw = priv->mdev->priv.eswitch;
+	struct mlx5_core_dev *mdev = priv->mdev;
+	struct mlx5_flow_destination dest = {};
+	struct mlx5_flow_act flow_act = {};
+	struct mlx5e_psp_fdb_host_tx *htx;
+	struct mlx5_flow_namespace *ns;
+	struct mlx5_flow_spec *spec;
+	int err;
+
+	ns = mlx5_get_flow_namespace(mdev, MLX5_FLOW_NAMESPACE_FDB);
+	if (!ns)
+		return -EOPNOTSUPP;
+
+	htx = kzalloc_obj(*htx);
+	if (!htx)
+		return -ENOMEM;
+	spec = kvzalloc_obj(*spec);
+	if (!spec) {
+		kfree(htx);
+		return -ENOMEM;
+	}
+
+	htx->tx_ft = mlx5e_psp_fdb_tx_get(priv);
+	if (IS_ERR(htx->tx_ft)) {
+		err = PTR_ERR(htx->tx_ft);
+		goto err;
+	}
+
+	htx->ft = psp_fdb_ft_create(ns, FDB_CRYPTO_EGRESS,
+				    MLX5E_PSP_FDB_HOST_TX_FT_LEVEL);
+	if (IS_ERR(htx->ft)) {
+		err = PTR_ERR(htx->ft);
+		goto err;
+	}
+
+	/* Under the lock against mlx5e_psp_fdb_host_tx_update_next() */
+	mutex_lock(&priv->psp->fdb_rx_lock);
+	psp_fdb_host_tx_next(esw, &htx->next);
+
+	/* The IPsec Tx policy table is at the same level */
+	flow_act.action = MLX5_FLOW_CONTEXT_ACTION_FWD_DEST;
+	flow_act.flags = FLOW_ACT_IGNORE_FLOW_LEVEL;
+	dest = htx->next;
+	err = psp_fdb_miss_create(htx->ft, &flow_act, &dest, 1,
+				  &htx->miss_group, &htx->miss_rule);
+	if (err)
+		goto err_unlock;
+
+	/* Match like the NIC Tx table: the driver inserted UDP + PSP */
+	spec->match_criteria_enable = MLX5_MATCH_OUTER_HEADERS;
+	MLX5_SET_TO_ONES(fte_match_param, spec->match_criteria,
+			 outer_headers.ip_protocol);
+	MLX5_SET(fte_match_param, spec->match_value, outer_headers.ip_protocol,
+		 IPPROTO_UDP);
+	MLX5_SET_TO_ONES(fte_match_param, spec->match_criteria,
+			 outer_headers.udp_dport);
+	MLX5_SET(fte_match_param, spec->match_value, outer_headers.udp_dport,
+		 PSP_DEFAULT_UDP_PORT);
+	memset(&flow_act, 0, sizeof(flow_act));
+	flow_act.action = MLX5_FLOW_CONTEXT_ACTION_CRYPTO_ENCRYPT |
+			  MLX5_FLOW_CONTEXT_ACTION_FWD_DEST;
+	flow_act.crypto.type = MLX5_FLOW_CONTEXT_ENCRYPT_DECRYPT_TYPE_PSP;
+	memset(&dest, 0, sizeof(dest));
+	dest.type = MLX5_FLOW_DESTINATION_TYPE_FLOW_TABLE;
+	dest.ft = htx->tx_ft;
+	htx->rule = mlx5_add_flow_rules(htx->ft, spec, &flow_act, &dest, 1);
+	if (IS_ERR(htx->rule)) {
+		err = PTR_ERR(htx->rule);
+		goto err_unlock;
+	}
+
+	kvfree(spec);
+	priv->psp->fdb_host_tx = htx;
+	esw->offloads.ft_psp_host_tx = htx->ft;
+	mutex_unlock(&priv->psp->fdb_rx_lock);
+	return 0;
+
+err_unlock:
+	mutex_unlock(&priv->psp->fdb_rx_lock);
+err:
+	mlx5_core_warn(mdev, "Failed to create PSP FDB host Tx table: %d\n", err);
+	kvfree(spec);
+	psp_fdb_host_tx_free(priv, htx);
+	return err;
+}
+
+/* After the uplink's send queues, and their send-to-vport rules, are gone */
+void mlx5e_psp_fdb_host_tx_destroy(struct mlx5e_priv *priv)
+{
+	struct mlx5e_psp_fdb_host_tx *htx;
+
+	mutex_lock(&priv->psp->fdb_rx_lock);
+	htx = priv->psp->fdb_host_tx;
+	priv->mdev->priv.eswitch->offloads.ft_psp_host_tx = NULL;
+	priv->psp->fdb_host_tx = NULL;
+	mutex_unlock(&priv->psp->fdb_rx_lock);
+
+	if (htx)
+		psp_fdb_host_tx_free(priv, htx);
+}
+
+/* The eswitch IPsec Tx tables came or went (ipsec_esw_tx_ft_policy_set()):
+ * send what isn't PSP there, or to the uplink.
+ */
+void mlx5e_psp_fdb_host_tx_update_next(struct mlx5_core_dev *mdev)
+{
+	struct mlx5_eswitch *esw = mdev->priv.eswitch;
+	struct mlx5e_rep_priv *uplink_rpriv;
+	struct mlx5_flow_destination next;
+	struct mlx5e_psp_fdb_host_tx *htx;
+	struct mlx5e_priv *priv;
+
+	uplink_rpriv = mlx5_eswitch_get_uplink_priv(esw, REP_ETH);
+	if (!uplink_rpriv || !uplink_rpriv->netdev)
+		return;
+	priv = netdev_priv(uplink_rpriv->netdev);
+	if (!priv->psp)
+		return;
+
+	mutex_lock(&priv->psp->fdb_rx_lock);
+	htx = priv->psp->fdb_host_tx;
+	if (htx) {
+		psp_fdb_host_tx_next(esw, &next);
+		if (mlx5_modify_rule_destination(htx->miss_rule, &next,
+						 &htx->next))
+			mlx5_core_warn(mdev, "PSP: failed to update the host Tx table for IPsec\n");
+		else
+			htx->next = next;
+	}
+	mutex_unlock(&priv->psp->fdb_rx_lock);
 }
 
 void mlx5e_psp_fdb_rx_get_stats(struct mlx5e_priv *priv,
