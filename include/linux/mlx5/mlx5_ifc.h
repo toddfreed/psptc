@@ -433,7 +433,9 @@ struct mlx5_ifc_flow_table_fields_supported_2_bits {
 	u8         bth_opcode[0x1];
 	u8         reserved_at_f[0x1];
 	u8         tunnel_header_0_1[0x1];
-	u8         reserved_at_11[0xf];
+	u8         reserved_at_11[0xa];
+	u8         psp_header[0x1];
+	u8         reserved_at_1c[0x4];
 
 	u8         reserved_at_20[0xf];
 	u8         ipsec_next_header[0x1];
@@ -800,11 +802,14 @@ struct mlx5_ifc_fte_match_set_misc5_bits {
 };
 
 struct mlx5_ifc_fte_match_set_misc6_bits {
-	u8         reserved_at_0[0x1a];
+	u8         psp_nexthdr[0x8];
+	u8         reserved_at_8[0x12];
 	u8         psp_version[0x4];
 	u8         reserved_at_1e[0x2];
 
-	u8         reserved_at_20[0x1e0];
+	u8         psp_spi[0x20];
+
+	u8         reserved_at_40[0x1c0];
 };
 
 
