@@ -219,10 +219,14 @@ tc_act_parse_psp_decap(struct mlx5e_tc_act_parse_state *parse_state,
 		return -EOPNOTSUPP;
 	}
 
-	err = mlx5e_psp_fdb_rx_get(priv);
-	if (err) {
-		NL_SET_ERR_MSG_MOD(extack, "Failed to set up PSP decryption in the FDB");
-		return err;
+	/* A rule with PSP matches already holds them */
+	if (!attr->psp_fdb_rx) {
+		err = mlx5e_psp_fdb_rx_get(priv);
+		if (err) {
+			NL_SET_ERR_MSG_MOD(extack, "Failed to set up PSP decryption in the FDB");
+			return err;
+		}
+		attr->psp_fdb_rx = true;
 	}
 	attr->psp_decap = true;
 

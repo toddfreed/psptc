@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0 OR Linux-OpenIB
 
 /* PSP decryption in the FDB, for "psp decap mode tunnel" tc rules on the
- * uplink (en/tc/act/psp.c).
+ * uplink (en/tc/act/psp.c) and for tc rules with flower PSP matches.
  *
  * While there are such rules, PSP packets from the uplink are decrypted
  * before the tc tables, the same way as eswitch IPsec:
@@ -17,6 +17,11 @@
  * The device derives the key from the SPI, so there is one decrypt rule
  * for all associations. The tc rule then removes the outer headers and
  * trailer (DEL_PSP_TUNNEL) and forwards.
+ *
+ * tc rules can also match the SPI and the version ("flower psp_spi",
+ * "psp_ver"): the device parses the PSP header into misc_parameters_6.
+ * It does so whether or not the packet was decrypted, so these rules hold
+ * the decryption tables too.
  */
 
 #include "fs_core.h"
@@ -720,4 +725,83 @@ void mlx5e_psp_fdb_rx_get_stats(struct mlx5e_priv *priv,
 	if (psp->fdb_tx)
 		psp_fdb_tx_add_stats(priv->mdev, psp->fdb_tx, stats);
 	mutex_unlock(&psp->fdb_rx_lock);
+}
+
+/* flower PSP matches in an FDB rule on the uplink. priv is the uplink's. */
+int mlx5e_psp_fdb_match(struct mlx5e_priv *priv, struct mlx5_flow_spec *spec,
+			const struct flow_dissector_key_psp *key,
+			const struct flow_dissector_key_psp *mask,
+			struct netlink_ext_ack *extack)
+{
+	struct mlx5_core_dev *mdev = priv->mdev;
+	void *headers_c, *headers_v;
+	void *misc6_c, *misc6_v;
+	u32 c, v;
+
+	if (!mlx5e_psp_fdb_steering_ok(mdev)) {
+		NL_SET_ERR_MSG_MOD(extack, "PSP offload in switchdev requires flow_steering_mode dmfs");
+		return -EOPNOTSUPP;
+	}
+	if (!priv->psp || !priv->psp->psd || !mlx5e_is_uplink_rep(priv)) {
+		NL_SET_ERR_MSG_MOD(extack, "PSP matches are only offloaded on the uplink, with PSP enabled");
+		return -EOPNOTSUPP;
+	}
+	if (!MLX5_CAP_ESW_FT_FIELD_SUPPORT_2(mdev, psp_header)) {
+		NL_SET_ERR_MSG_MOD(extack, "Matching the PSP header is not supported by the device");
+		return -EOPNOTSUPP;
+	}
+	/* Only this device's decrypted packets get to its FDB */
+	if (mask->dev_id && key->dev_id != priv->psp->psd->id) {
+		NL_SET_ERR_MSG_MOD(extack, "psp_dev is not the uplink's PSP device");
+		return -EOPNOTSUPP;
+	}
+
+	/* The PSP matches only match decrypted packets, as in software. Only
+	 * those get to the tc tables with UDP destination port 1000, the
+	 * decrypt check table drops the others.
+	 */
+	headers_c = MLX5_ADDR_OF(fte_match_param, spec->match_criteria,
+				 outer_headers);
+	headers_v = MLX5_ADDR_OF(fte_match_param, spec->match_value,
+				 outer_headers);
+
+	/* Here ip_proto and dst_port match the outer headers, which for PSP
+	 * are UDP to port 1000. Don't change a rule which asks for others.
+	 */
+	c = MLX5_GET(fte_match_set_lyr_2_4, headers_c, ip_protocol);
+	v = MLX5_GET(fte_match_set_lyr_2_4, headers_v, ip_protocol);
+	if ((IPPROTO_UDP & c) != (v & c)) {
+		NL_SET_ERR_MSG_MOD(extack, "PSP matches imply ip_proto udp");
+		return -EOPNOTSUPP;
+	}
+	c = MLX5_GET(fte_match_set_lyr_2_4, headers_c, udp_dport);
+	v = MLX5_GET(fte_match_set_lyr_2_4, headers_v, udp_dport);
+	if ((PSP_DEFAULT_UDP_PORT & c) != (v & c)) {
+		NL_SET_ERR_MSG_MOD(extack, "PSP matches imply UDP dst_port 1000");
+		return -EOPNOTSUPP;
+	}
+
+	MLX5_SET_TO_ONES(fte_match_set_lyr_2_4, headers_c, ip_protocol);
+	MLX5_SET(fte_match_set_lyr_2_4, headers_v, ip_protocol, IPPROTO_UDP);
+	MLX5_SET_TO_ONES(fte_match_set_lyr_2_4, headers_c, udp_dport);
+	MLX5_SET(fte_match_set_lyr_2_4, headers_v, udp_dport,
+		 PSP_DEFAULT_UDP_PORT);
+	spec->match_criteria_enable |= MLX5_MATCH_OUTER_HEADERS;
+
+	if (!mask->spi && !mask->version)
+		return 0;
+
+	misc6_c = MLX5_ADDR_OF(fte_match_param, spec->match_criteria,
+			       misc_parameters_6);
+	misc6_v = MLX5_ADDR_OF(fte_match_param, spec->match_value,
+			       misc_parameters_6);
+	MLX5_SET(fte_match_set_misc6, misc6_c, psp_spi, be32_to_cpu(mask->spi));
+	MLX5_SET(fte_match_set_misc6, misc6_v, psp_spi,
+		 be32_to_cpu(key->spi & mask->spi));
+	MLX5_SET(fte_match_set_misc6, misc6_c, psp_version, mask->version);
+	MLX5_SET(fte_match_set_misc6, misc6_v, psp_version,
+		 key->version & mask->version);
+	spec->match_criteria_enable |= MLX5_MATCH_MISC_PARAMETERS_6;
+
+	return 0;
 }

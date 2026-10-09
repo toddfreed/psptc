@@ -2692,6 +2692,47 @@ static bool skip_key_basic(struct net_device *filter_dev,
 	return false;
 }
 
+/* flower psp_spi, psp_ver and psp_dev. The PSP header is still there when
+ * the tc rules see the packet (psp_fdb.c).
+ */
+static int parse_psp_match(struct mlx5e_priv *priv, struct mlx5e_tc_flow *flow,
+			   struct mlx5_flow_spec *spec, struct flow_rule *rule,
+			   struct netlink_ext_ack *extack)
+{
+#if IS_ENABLED(CONFIG_MLX5_EN_PSP)
+	struct flow_match_psp match;
+	int err;
+
+	flow_rule_match_psp(rule, &match);
+	if (!match.mask->present)
+		return 0;
+	if (!mlx5e_is_eswitch_flow(flow)) {
+		NL_SET_ERR_MSG_MOD(extack, "PSP matches are only offloaded in switchdev mode");
+		return -EOPNOTSUPP;
+	}
+
+	err = mlx5e_psp_fdb_match(priv, spec, match.key, match.mask, extack);
+	if (err)
+		return err;
+
+	/* As in software, only decrypted packets may match. Without the FDB
+	 * decryption tables, PSP packets would get to the tc tables still
+	 * encrypted, and the device parses their PSP header all the same.
+	 */
+	err = mlx5e_psp_fdb_rx_get(priv);
+	if (err) {
+		NL_SET_ERR_MSG_MOD(extack, "Failed to set up PSP decryption in the FDB");
+		return err;
+	}
+	flow->attr->psp_fdb_rx = true;
+
+	return 0;
+#else
+	NL_SET_ERR_MSG_MOD(extack, "PSP matches need CONFIG_MLX5_EN_PSP");
+	return -EOPNOTSUPP;
+#endif
+}
+
 static int __parse_cls_flower(struct mlx5e_priv *priv,
 			      struct mlx5e_tc_flow *flow,
 			      struct mlx5_flow_spec *spec,
@@ -2745,7 +2786,8 @@ static int __parse_cls_flower(struct mlx5e_priv *priv,
 	      BIT_ULL(FLOW_DISSECTOR_KEY_ENC_IP) |
 	      BIT_ULL(FLOW_DISSECTOR_KEY_ENC_OPTS) |
 	      BIT_ULL(FLOW_DISSECTOR_KEY_ICMP) |
-	      BIT_ULL(FLOW_DISSECTOR_KEY_MPLS))) {
+	      BIT_ULL(FLOW_DISSECTOR_KEY_MPLS) |
+	      BIT_ULL(FLOW_DISSECTOR_KEY_PSP))) {
 		NL_SET_ERR_MSG_MOD(extack, "Unsupported key");
 		netdev_dbg(priv->netdev, "Unsupported key used: 0x%llx\n",
 			   dissector->used_keys);
@@ -3137,6 +3179,12 @@ static int __parse_cls_flower(struct mlx5e_priv *priv,
 			spec->match_criteria_enable |= MLX5_MATCH_MISC_PARAMETERS_3;
 		}
 	}
+	if (flow_rule_match_key(rule, FLOW_DISSECTOR_KEY_PSP)) {
+		err = parse_psp_match(priv, flow, spec, rule, extack);
+		if (err)
+			return err;
+	}
+
 	/* Currently supported only for MPLS over UDP */
 	if (flow_rule_match_key(rule, FLOW_DISSECTOR_KEY_MPLS) &&
 	    !netif_is_bareudp(filter_dev)) {
@@ -3690,6 +3738,7 @@ mlx5e_clone_flow_attr_for_post_act(struct mlx5_flow_attr *attr,
 	attr2->act_id_restore_rule = NULL;
 	attr2->psp_pas = NULL;
 	attr2->psp_decap = false;
+	attr2->psp_fdb_rx = false;
 	memset(&attr2->ct_attr, 0, sizeof(attr2->ct_attr));
 
 	if (ns_type == MLX5_FLOW_NAMESPACE_FDB) {
@@ -4469,9 +4518,9 @@ mlx5_free_flow_attr_actions(struct mlx5e_tc_flow *flow, struct mlx5_flow_attr *a
 		attr->psp_pas = NULL;
 	}
 #if IS_ENABLED(CONFIG_MLX5_EN_PSP)
-	if (attr->psp_decap) {
+	if (attr->psp_fdb_rx) {
 		mlx5e_psp_fdb_rx_put(flow->priv);
-		attr->psp_decap = false;
+		attr->psp_fdb_rx = false;
 	}
 	/* Encap flows are on a VF representor, the table is the uplink's */
 	if (mlx5e_is_eswitch_flow(flow) && attr->esw_attr->psp_tx_ft) {

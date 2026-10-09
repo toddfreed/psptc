@@ -66,6 +66,10 @@ int mlx5e_psp_fdb_rx_get(struct mlx5e_priv *priv);
 void mlx5e_psp_fdb_rx_put(struct mlx5e_priv *priv);
 struct mlx5_flow_table *mlx5e_psp_fdb_tx_get(struct mlx5e_priv *priv);
 void mlx5e_psp_fdb_tx_put(struct mlx5e_priv *priv);
+int mlx5e_psp_fdb_match(struct mlx5e_priv *priv, struct mlx5_flow_spec *spec,
+			const struct flow_dissector_key_psp *key,
+			const struct flow_dissector_key_psp *mask,
+			struct netlink_ext_ack *extack);
 int mlx5e_psp_fdb_host_tx_create(struct mlx5e_priv *priv);
 void mlx5e_psp_fdb_host_tx_destroy(struct mlx5e_priv *priv);
 void mlx5e_psp_fdb_host_tx_update_next(struct mlx5_core_dev *mdev);
