@@ -2692,6 +2692,58 @@ static bool skip_key_basic(struct net_device *filter_dev,
 	return false;
 }
 
+/* flower psp_spi, psp_ver and psp_dev. The PSP header is still there when
+ * the tc rules see the packet (psp_fdb.c).
+ */
+static int parse_psp_match(struct mlx5e_priv *priv, struct mlx5e_tc_flow *flow,
+			   struct mlx5_flow_spec *spec, struct flow_rule *rule,
+			   struct net_device *filter_dev,
+			   struct netlink_ext_ack *extack)
+{
+#if IS_ENABLED(CONFIG_MLX5_EN_PSP)
+	struct flow_match_psp match;
+	struct mlx5e_psp *psp;
+	int err;
+
+	flow_rule_match_psp(rule, &match);
+	if (!match.mask->present)
+		return 0;
+	if (!mlx5e_is_eswitch_flow(flow)) {
+		NL_SET_ERR_MSG_MOD(extack, "PSP matches are only offloaded in switchdev mode");
+		return -EOPNOTSUPP;
+	}
+	/* The device parses a PSP header wherever it finds one, e.g. the
+	 * inner one of a packet a tunnel device rule decapsulated, which the
+	 * FDB never decrypted. Only the uplink's rules in chain 0 see what the
+	 * decryption tables let through.
+	 */
+	if (flow->attr->chain || filter_dev != priv->netdev) {
+		NL_SET_ERR_MSG_MOD(extack, "PSP matches are only offloaded in chain 0 of the uplink");
+		return -EOPNOTSUPP;
+	}
+
+	err = mlx5e_psp_fdb_match(priv, spec, match.key, match.mask, extack);
+	if (err)
+		return err;
+
+	/* As in software, only decrypted packets may match. Without the FDB
+	 * decryption tables, PSP packets would get to the tc tables still
+	 * encrypted, and the device parses their PSP header all the same.
+	 */
+	psp = mlx5e_psp_fdb_rx_get(priv);
+	if (IS_ERR(psp)) {
+		NL_SET_ERR_MSG_MOD(extack, "Failed to set up PSP decryption in the FDB");
+		return PTR_ERR(psp);
+	}
+	flow->attr->psp_fdb_rx = psp;
+
+	return 0;
+#else
+	NL_SET_ERR_MSG_MOD(extack, "PSP matches need CONFIG_MLX5_EN_PSP");
+	return -EOPNOTSUPP;
+#endif
+}
+
 static int __parse_cls_flower(struct mlx5e_priv *priv,
 			      struct mlx5e_tc_flow *flow,
 			      struct mlx5_flow_spec *spec,
@@ -2745,7 +2797,8 @@ static int __parse_cls_flower(struct mlx5e_priv *priv,
 	      BIT_ULL(FLOW_DISSECTOR_KEY_ENC_IP) |
 	      BIT_ULL(FLOW_DISSECTOR_KEY_ENC_OPTS) |
 	      BIT_ULL(FLOW_DISSECTOR_KEY_ICMP) |
-	      BIT_ULL(FLOW_DISSECTOR_KEY_MPLS))) {
+	      BIT_ULL(FLOW_DISSECTOR_KEY_MPLS) |
+	      BIT_ULL(FLOW_DISSECTOR_KEY_PSP))) {
 		NL_SET_ERR_MSG_MOD(extack, "Unsupported key");
 		netdev_dbg(priv->netdev, "Unsupported key used: 0x%llx\n",
 			   dissector->used_keys);
@@ -3137,6 +3190,12 @@ static int __parse_cls_flower(struct mlx5e_priv *priv,
 			spec->match_criteria_enable |= MLX5_MATCH_MISC_PARAMETERS_3;
 		}
 	}
+	if (flow_rule_match_key(rule, FLOW_DISSECTOR_KEY_PSP)) {
+		err = parse_psp_match(priv, flow, spec, rule, filter_dev, extack);
+		if (err)
+			return err;
+	}
+
 	/* Currently supported only for MPLS over UDP */
 	if (flow_rule_match_key(rule, FLOW_DISSECTOR_KEY_MPLS) &&
 	    !netif_is_bareudp(filter_dev)) {
