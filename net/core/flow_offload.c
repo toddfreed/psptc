@@ -256,6 +256,13 @@ void flow_rule_match_l2tpv3(const struct flow_rule *rule,
 }
 EXPORT_SYMBOL(flow_rule_match_l2tpv3);
 
+void flow_rule_match_psp(const struct flow_rule *rule,
+			 struct flow_match_psp *out)
+{
+	FLOW_DISSECTOR_MATCH(rule, FLOW_DISSECTOR_KEY_PSP, out);
+}
+EXPORT_SYMBOL(flow_rule_match_psp);
+
 struct flow_block_cb *flow_block_cb_alloc(flow_setup_cb_t *cb,
 					  void *cb_ident, void *cb_priv,
 					  void (*release)(void *cb_priv))

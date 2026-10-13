@@ -467,16 +467,6 @@ static int fl_hw_replace_filter(struct tcf_proto *tp,
 	bool skip_sw = tc_skip_sw(f->flags);
 	int err = 0;
 
-	/* No driver offloads the PSP matches yet, and some offload a rule
-	 * without checking which keys it uses: it would match without them
-	 */
-	if (dissector_uses_key(&f->mask->dissector, FLOW_DISSECTOR_KEY_PSP)) {
-		if (!skip_sw)
-			return 0;
-		NL_SET_ERR_MSG_MOD(extack, "PSP matches can't be offloaded");
-		return -EOPNOTSUPP;
-	}
-
 	cls_flower.rule = flow_rule_alloc(tcf_exts_num_actions(&f->exts));
 	if (!cls_flower.rule)
 		return -ENOMEM;
