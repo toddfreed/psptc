@@ -42,6 +42,7 @@ TEST_PROGS = \
 	ntuple.py \
 	pause.py \
 	pp_alloc_fail.py \
+	psp_tunnel.py \
 	rss_api.py \
 	rss_ctx.py \
 	rss_drv.py \
