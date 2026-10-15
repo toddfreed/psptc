@@ -20,7 +20,9 @@
  *
  * The packet has already been decrypted by the time it gets to the tc tables
  * (en_accel/psp_fdb.c), and the rule strips the outer headers and trailer
- * and writes the new L2 header. The inner packet is assumed to be IPv6.
+ * and writes the new L2 header. Its ethertype depends on the inner packet,
+ * so the rule is offloaded as two, matching the PSP next header (see
+ * mlx5e_tc_offload_fdb_rules()).
  */
 
 #include <linux/bitfield.h>
@@ -192,6 +194,12 @@ tc_act_can_offload_psp_decap(struct mlx5e_tc_act_parse_state *parse_state,
 		return false;
 	}
 
+	/* For the ethertype of the inner packet */
+	if (!MLX5_CAP_ESW_FT_FIELD_SUPPORT_2(priv->mdev, psp_header)) {
+		NL_SET_ERR_MSG_MOD(extack, "Device can't match the PSP next header");
+		return false;
+	}
+
 	if (!mlx5e_is_uplink_rep(priv) || !priv->psp) {
 		NL_SET_ERR_MSG_MOD(extack, "psp decap is only supported on the uplink, with PSP enabled");
 		return false;
@@ -230,6 +238,7 @@ tc_act_parse_psp_decap(struct mlx5e_tc_act_parse_state *parse_state,
 	}
 	attr->psp_decap = true;
 
+	/* For the inner IPv6 rule; mlx5e_attach_decap() adds the IPv4 one */
 	attr->esw_attr->eth.h_proto = htons(ETH_P_IPV6);
 	attr->action |= MLX5_FLOW_CONTEXT_ACTION_PACKET_REFORMAT;
 	flow_flag_set(parse_state->flow, L3_TO_L2_DECAP);

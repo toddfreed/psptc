@@ -1464,6 +1464,58 @@ static void mlx5e_tc_del_nic_flow(struct mlx5e_priv *priv,
 	kfree(flow->attr);
 }
 
+static void psp_nexthdr_match(struct mlx5_flow_spec *spec, u8 nexthdr)
+{
+	void *misc6_c = MLX5_ADDR_OF(fte_match_param, spec->match_criteria,
+				     misc_parameters_6);
+	void *misc6_v = MLX5_ADDR_OF(fte_match_param, spec->match_value,
+				     misc_parameters_6);
+
+	MLX5_SET_TO_ONES(fte_match_set_misc6, misc6_c, psp_nexthdr);
+	MLX5_SET(fte_match_set_misc6, misc6_v, psp_nexthdr, nexthdr);
+	spec->match_criteria_enable |= MLX5_MATCH_MISC_PARAMETERS_6;
+}
+
+/* The L2 header written by PSP tunnel decap needs the ethertype of the
+ * inner packet. The PSP header's next header is in the clear. Offload a
+ * rule for each inner protocol: rule[0] for IPv6, with the decap reformat
+ * of attr, and rule[1] for IPv4, with the flow's IPv4 one.
+ */
+static struct mlx5_flow_handle *
+mlx5e_tc_offload_psp_decap(struct mlx5e_tc_flow *flow,
+			   struct mlx5_flow_spec *spec,
+			   struct mlx5_flow_attr *attr)
+{
+	struct mlx5_esw_flow_attr *esw_attr = attr->esw_attr;
+	struct mlx5_pkt_reformat *reformat = esw_attr->decap_pkt_reformat;
+	struct mlx5_flow_spec *spec6, *spec4;
+	struct mlx5_flow_handle *rule;
+
+	spec6 = kvmalloc_array(2, sizeof(*spec), GFP_KERNEL);
+	if (!spec6)
+		return ERR_PTR(-ENOMEM);
+	spec4 = spec6 + 1;
+	*spec6 = *spec;
+	*spec4 = *spec;
+	psp_nexthdr_match(spec6, IPPROTO_IPV6);
+	psp_nexthdr_match(spec4, IPPROTO_IPIP);
+
+	rule = mlx5e_tc_rule_offload(flow->priv, spec6, attr);
+	if (IS_ERR(rule))
+		goto out;
+
+	esw_attr->decap_pkt_reformat = flow->decap_reformat_ip4->pkt_reformat;
+	flow->rule[1] = mlx5e_tc_rule_offload(flow->priv, spec4, attr);
+	esw_attr->decap_pkt_reformat = reformat;
+	if (IS_ERR(flow->rule[1])) {
+		mlx5e_tc_rule_unoffload(flow->priv, rule, attr);
+		rule = flow->rule[1];
+	}
+out:
+	kvfree(spec6);
+	return rule;
+}
+
 struct mlx5_flow_handle *
 mlx5e_tc_offload_fdb_rules(struct mlx5_eswitch *esw,
 			   struct mlx5e_tc_flow *flow,
@@ -1474,6 +1526,9 @@ mlx5e_tc_offload_fdb_rules(struct mlx5_eswitch *esw,
 
 	if (attr->flags & MLX5_ATTR_FLAG_SLOW_PATH)
 		return mlx5_eswitch_add_offloaded_rule(esw, spec, attr);
+
+	if (attr->psp_decap)
+		return mlx5e_tc_offload_psp_decap(flow, spec, attr);
 
 	rule = mlx5e_tc_rule_offload(flow->priv, spec, attr);
 
@@ -1504,6 +1559,8 @@ void mlx5e_tc_unoffload_fdb_rules(struct mlx5_eswitch *esw,
 
 	if (attr->esw_attr->split_count)
 		mlx5_eswitch_del_fwd_rule(esw, flow->rule[1], attr);
+	else if (attr->psp_decap)
+		mlx5e_tc_rule_unoffload(flow->priv, flow->rule[1], attr);
 
 	mlx5e_tc_rule_unoffload(flow->priv, flow->rule[0], attr);
 }
@@ -1978,6 +2035,13 @@ mlx5e_tc_add_fdb_flow(struct mlx5e_priv *priv,
 	}
 
 	if (flow_flag_test(flow, L3_TO_L2_DECAP)) {
+		/* PSP decap uses rule[1] for inner IPv4 */
+		if (attr->psp_decap && esw_attr->split_count) {
+			NL_SET_ERR_MSG_MOD(extack,
+					   "psp decap can't be combined with mirroring");
+			err = -EOPNOTSUPP;
+			goto err_out;
+		}
 		err = mlx5e_attach_decap(priv, flow, extack);
 		if (err)
 			goto err_out;
@@ -4564,6 +4628,7 @@ mlx5e_alloc_flow(struct mlx5e_priv *priv, int attr_size,
 		INIT_LIST_HEAD(&flow->encaps[out_index].list);
 	INIT_LIST_HEAD(&flow->hairpin);
 	INIT_LIST_HEAD(&flow->l3_to_l2_reformat);
+	INIT_LIST_HEAD(&flow->l3_to_l2_reformat_ip4);
 	INIT_LIST_HEAD(&flow->attrs);
 	INIT_LIST_HEAD(&flow->peer_flows);
 	refcount_set(&flow->refcnt, 1);

@@ -561,18 +561,19 @@ void mlx5e_detach_encap(struct mlx5e_priv *priv,
 	mlx5e_encap_dealloc(priv, e);
 }
 
-void mlx5e_detach_decap(struct mlx5e_priv *priv,
-			struct mlx5e_tc_flow *flow)
+static void __mlx5e_detach_decap(struct mlx5e_priv *priv,
+				 struct mlx5e_decap_entry **dp,
+				 struct list_head *flow_list)
 {
 	struct mlx5_eswitch *esw = priv->mdev->priv.eswitch;
-	struct mlx5e_decap_entry *d = flow->decap_reformat;
+	struct mlx5e_decap_entry *d = *dp;
 
 	if (!d)
 		return;
 
 	mutex_lock(&esw->offloads.decap_tbl_lock);
-	list_del(&flow->l3_to_l2_reformat);
-	flow->decap_reformat = NULL;
+	list_del(flow_list);
+	*dp = NULL;
 
 	if (!refcount_dec_and_test(&d->refcnt)) {
 		mutex_unlock(&esw->offloads.decap_tbl_lock);
@@ -582,6 +583,15 @@ void mlx5e_detach_decap(struct mlx5e_priv *priv,
 	mutex_unlock(&esw->offloads.decap_tbl_lock);
 
 	mlx5e_decap_dealloc(priv, d);
+}
+
+void mlx5e_detach_decap(struct mlx5e_priv *priv,
+			struct mlx5e_tc_flow *flow)
+{
+	__mlx5e_detach_decap(priv, &flow->decap_reformat_ip4,
+			     &flow->l3_to_l2_reformat_ip4);
+	__mlx5e_detach_decap(priv, &flow->decap_reformat,
+			     &flow->l3_to_l2_reformat);
 }
 
 bool mlx5e_tc_tun_encap_info_equal_generic(struct mlx5e_encap_key *a,
@@ -945,29 +955,18 @@ out_err_init:
 	return err;
 }
 
-int mlx5e_attach_decap(struct mlx5e_priv *priv,
-		       struct mlx5e_tc_flow *flow,
-		       struct netlink_ext_ack *extack)
+static int __mlx5e_attach_decap(struct mlx5e_priv *priv,
+				struct mlx5e_decap_key *keyp,
+				struct mlx5e_decap_entry **dp,
+				struct list_head *flow_list)
 {
 	struct mlx5_eswitch *esw = priv->mdev->priv.eswitch;
-	struct mlx5_esw_flow_attr *attr = flow->attr->esw_attr;
 	struct mlx5_pkt_reformat_params reformat_params;
+	struct mlx5e_decap_key key = *keyp;
 	struct mlx5e_decap_entry *d;
-	struct mlx5e_decap_key key;
 	uintptr_t hash_key;
 	int err = 0;
 
-	if (sizeof(attr->eth) > MLX5_CAP_ESW(priv->mdev, max_encap_header_size)) {
-		NL_SET_ERR_MSG_MOD(extack,
-				   "encap header larger than max supported");
-		return -EOPNOTSUPP;
-	}
-
-	key.key = attr->eth;
-	/* PSP tunnel decap (en/tc/act/psp.c) also removes the trailer */
-	key.reformat_type = flow->attr->psp_decap ?
-			    MLX5_REFORMAT_TYPE_DEL_PSP_TUNNEL :
-			    MLX5_REFORMAT_TYPE_L3_TUNNEL_TO_L2;
 	hash_key = hash_decap_info(&key);
 	mutex_lock(&esw->offloads.decap_tbl_lock);
 	d = mlx5e_decap_get(priv, &key, hash_key);
@@ -997,8 +996,8 @@ int mlx5e_attach_decap(struct mlx5e_priv *priv,
 
 	memset(&reformat_params, 0, sizeof(reformat_params));
 	reformat_params.type = key.reformat_type;
-	reformat_params.size = sizeof(attr->eth);
-	reformat_params.data = &attr->eth;
+	reformat_params.size = sizeof(key.key);
+	reformat_params.data = &d->key.key;
 	d->pkt_reformat = mlx5_packet_reformat_alloc(priv->mdev,
 						     &reformat_params,
 						     MLX5_FLOW_NAMESPACE_FDB);
@@ -1012,9 +1011,8 @@ int mlx5e_attach_decap(struct mlx5e_priv *priv,
 		goto out_free;
 
 found:
-	flow->decap_reformat = d;
-	attr->decap_pkt_reformat = d->pkt_reformat;
-	list_add(&flow->l3_to_l2_reformat, &d->flows);
+	*dp = d;
+	list_add(flow_list, &d->flows);
 	mutex_unlock(&esw->offloads.decap_tbl_lock);
 	return 0;
 
@@ -1025,6 +1023,47 @@ out_free:
 
 out_err:
 	mutex_unlock(&esw->offloads.decap_tbl_lock);
+	return err;
+}
+
+int mlx5e_attach_decap(struct mlx5e_priv *priv,
+		       struct mlx5e_tc_flow *flow,
+		       struct netlink_ext_ack *extack)
+{
+	struct mlx5_esw_flow_attr *attr = flow->attr->esw_attr;
+	struct mlx5e_decap_key key;
+	int err;
+
+	if (sizeof(attr->eth) > MLX5_CAP_ESW(priv->mdev, max_encap_header_size)) {
+		NL_SET_ERR_MSG_MOD(extack,
+				   "encap header larger than max supported");
+		return -EOPNOTSUPP;
+	}
+
+	key.key = attr->eth;
+	/* PSP tunnel decap (en/tc/act/psp.c) also removes the trailer */
+	key.reformat_type = flow->attr->psp_decap ?
+			    MLX5_REFORMAT_TYPE_DEL_PSP_TUNNEL :
+			    MLX5_REFORMAT_TYPE_L3_TUNNEL_TO_L2;
+	err = __mlx5e_attach_decap(priv, &key, &flow->decap_reformat,
+				   &flow->l3_to_l2_reformat);
+	if (err)
+		return err;
+	attr->decap_pkt_reformat = flow->decap_reformat->pkt_reformat;
+
+	if (!flow->attr->psp_decap)
+		return 0;
+
+	/* PSP tunnel decap is offloaded as one rule per inner protocol
+	 * (mlx5e_tc_offload_fdb_rules()), attr->eth is the IPv6 one
+	 */
+	key.key.h_proto = htons(ETH_P_IP);
+	err = __mlx5e_attach_decap(priv, &key, &flow->decap_reformat_ip4,
+				   &flow->l3_to_l2_reformat_ip4);
+	if (err) {
+		mlx5e_detach_decap(priv, flow);
+		attr->decap_pkt_reformat = NULL;
+	}
 	return err;
 }
 
