@@ -81,9 +81,12 @@ struct mlx5e_tc_flow {
 	unsigned long flags;
 	struct mlx5_flow_handle *rule[MLX5E_TC_MAX_SPLITS + 1];
 
-	/* flows sharing the same reformat object - currently mpls decap */
+	/* flows sharing the same reformat object - mpls and psp decap */
 	struct list_head l3_to_l2_reformat;
 	struct mlx5e_decap_entry *decap_reformat;
+	/* psp tunnel decap of inner IPv4, rule[1] */
+	struct list_head l3_to_l2_reformat_ip4;
+	struct mlx5e_decap_entry *decap_reformat_ip4;
 
 	/* flows sharing same route entry */
 	struct list_head decap_routes;
