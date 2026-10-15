@@ -344,6 +344,7 @@ struct flow_action_entry {
 			 * entry's destructor. NULL for decap.
 			 */
 			struct psp_assoc *pas;
+			u8		mode;		/* TCA_PSP_MODE_* */
 		} psp;
 	};
 	struct flow_action_cookie *user_cookie; /* user defined action cookie */

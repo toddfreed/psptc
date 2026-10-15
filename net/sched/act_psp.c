@@ -10,6 +10,10 @@
  *        takes no association. a rule which should only take the packets
  *        of one association matches its properties against psp packet header
  *        fields (flower psp_spi / psp_ver / psp_dev).
+ *
+ * In tunnel mode the outer header comes from a preceding tunnel_key set
+ * action and the device builds and strips it. Only hardware offload
+ * implements that so far: in software, tunnel mode drops.
  */
 
 #include <linux/ip.h>
@@ -119,6 +123,12 @@ static int tcf_psp_act(struct sk_buff *skb, const struct tc_action *a,
 	tcf_lastuse_update(&p->tcf_tm);
 	tcf_action_update_bstats(&p->common, skb);
 
+	if (unlikely(params->mode != TCA_PSP_MODE_TRANSPORT))
+		return tcf_psp_drop(p, skb,
+				    params->psp_action == TCA_PSP_ACT_ENCAP ?
+				    SKB_DROP_REASON_PSP_OUTPUT :
+				    SKB_DROP_REASON_PSP_INPUT);
+
 	switch (params->psp_action) {
 	case TCA_PSP_ACT_ENCAP:
 		/* Encap on ingress is hardware offload only, like tunnel
@@ -168,6 +178,7 @@ static const struct nla_policy psp_policy[TCA_PSP_MAX + 1] = {
 	[TCA_PSP_ACTION]	= NLA_POLICY_RANGE(NLA_U32, TCA_PSP_ACT_ENCAP,
 						   TCA_PSP_ACT_DECAP),
 	[TCA_PSP_ASSOC_ID]	= NLA_POLICY_MIN(NLA_U32, 1),
+	[TCA_PSP_MODE]		= NLA_POLICY_MAX(NLA_U8, TCA_PSP_MODE_MAX),
 };
 
 static void tcf_psp_release_params_rcu(struct rcu_head *head)
@@ -318,6 +329,8 @@ static int tcf_psp_init(struct net *net, struct nlattr *nla,
 	}
 	params_new->action = parm->action;
 	params_new->psp_action = psp_action;
+	params_new->mode = nla_get_u8_default(tb[TCA_PSP_MODE],
+					      TCA_PSP_MODE_TRANSPORT);
 	params_new->md = md;
 
 	spin_lock_bh(&p->tcf_lock);
@@ -371,7 +384,8 @@ static int tcf_psp_dump(struct sk_buff *skb, struct tc_action *a,
 	opt.action = params->action;
 
 	if (nla_put(skb, TCA_PSP_PARMS, sizeof(opt), &opt) ||
-	    nla_put_u32(skb, TCA_PSP_ACTION, params->psp_action))
+	    nla_put_u32(skb, TCA_PSP_ACTION, params->psp_action) ||
+	    nla_put_u8(skb, TCA_PSP_MODE, params->mode))
 		goto nla_put_failure;
 
 	if (params->md &&
@@ -414,6 +428,7 @@ static int tcf_psp_offload_act_setup(struct tc_action *act, void *entry_data,
 	struct tcf_psp_params *params;
 	enum flow_action_id id;
 	struct psp_assoc *pas;
+	u8 mode;
 
 	rcu_read_lock();
 	params = rcu_dereference(p->params);
@@ -422,6 +437,7 @@ static int tcf_psp_offload_act_setup(struct tc_action *act, void *entry_data,
 	pas = params->md ? params->md->u.psp_info.pas : NULL;
 	if (pas && bind)
 		psp_assoc_hold(pas);
+	mode = params->mode;
 	rcu_read_unlock();
 
 	if (bind) {
@@ -429,6 +445,7 @@ static int tcf_psp_offload_act_setup(struct tc_action *act, void *entry_data,
 
 		entry->id = id;
 		entry->psp.pas = pas;
+		entry->psp.mode = mode;
 		if (pas) {
 			entry->destructor = tcf_psp_offload_destructor;
 			entry->destructor_priv = pas;

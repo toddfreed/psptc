@@ -10,7 +10,8 @@ struct tcf_psp_params {
 	struct rcu_head		rcu;
 	int			action;
 	int			psp_action;
-	struct metadata_dst	*md;
+	u8			mode;		/* TCA_PSP_MODE_* */
+	struct metadata_dst	*md;		/* encap */
 };
 
 struct tcf_psp {
