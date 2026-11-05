@@ -1499,7 +1499,7 @@ def _tc_act_pkts(dev, pref, host=None):
     return _tc_act_stats(dev, pref, host)["packets"]
 
 
-def _fwd_client(cfg, ipver):
+def _fwd_client(cfg, ipver, mtu=None):
     """
     Set up a client in a netns behind veth psp-fwd0, and forward its
     traffic: only from psp-fwd0, the host's own forwarding settings stay as
@@ -1520,6 +1520,9 @@ def _fwd_client(cfg, ipver):
     # Goes away with the device
     with open(fwd, "w", encoding="utf-8") as fp:
         fp.write("1")
+    if mtu:
+        ip(f"link set psp-fwd0 mtu {mtu}")
+        ip(f"-n {ns.name} link set psp-fwd1 mtu {mtu}")
     # IPv6 may be disabled on new devices
     if cmd(f"ip addr add {local}/{plen} dev psp-fwd0 nodad",
            fail=False).ret:
@@ -1636,6 +1639,57 @@ def data_tc_encap_local(cfg, ipver):
         ksft_eq(_tc_act_pkts("psp-fwd0", 10), 1)
         ksft_eq(_tc_act_stats("psp-fwd0", 10)["drops"], 1,
                 comment="dropped by encap")
+
+
+def data_tc_encap_routed_frag(cfg):
+    """ Test encap drops the fragments of routed packets """
+    _init_psp_dev(cfg)
+    _require_tc_psp(cfg)
+    cfg.require_ipver("4")
+    _, tx = _sockless_assocs(cfg)
+
+    # Datagrams which fit the veth but not our egress, and have no DF, get
+    # fragmented when we forward them, before tc egress
+    mtu = ip(f"link show dev {cfg.ifname}", json=True)[0]['mtu']
+    s = _fwd_client(cfg, "4", mtu=mtu + 100)
+    # IP_MTU_DISCOVER, IP_PMTUDISC_DONT: no DF
+    s.setsockopt(socket.IPPROTO_IP, 10, 0)
+
+    port = rand_port(socket.SOCK_DGRAM)
+    rem = cfg.remote_addr_v["4"]
+    _remote_filter(cfg, 5, "ip", "ip_flags frag action continue")
+
+    def remote_frags():
+        return _tc_act_pkts(cfg.remote_ifname, 5, host=cfg.remote)
+
+    def send(n):
+        for _ in range(n):
+            s.sendto(b'x' * mtu, (rem, port))
+            time.sleep(0.01)
+        time.sleep(0.2)
+
+    # Without encap the datagrams are forwarded, in fragments, unless
+    # something else, e.g. a FORWARD policy, stops them
+    send(5)
+    frags = remote_frags()
+    if not frags:
+        raise KsftSkipEx("forwarded fragments don't reach the remote")
+
+    # Encap on our egress, matching the fragments by address: only the
+    # first one carries the UDP header, a port match would miss the
+    # others. Transport mode can't carry fragments, encap drops them all,
+    # and none may reach the remote in clear text.
+    _tc_clsact(cfg.ifname)
+    tc(f"filter add dev {cfg.ifname} egress pref 10 handle 1 protocol ip "
+       f"flower dst_ip {rem} ip_flags frag "
+       f"action psp encap assoc {tx['id']}")
+    defer(tc, f"filter del dev {cfg.ifname} egress pref 10 handle 1 "
+          f"protocol ip flower")
+    send(5)
+    stats = _tc_action_stats(cfg, "egress")
+    ksft_gt(stats["packets"], 0)
+    ksft_eq(stats["drops"], stats["packets"], comment="dropped by encap")
+    ksft_eq(remote_frags(), frags)
 
 
 def removal_device_tc(cfg):
