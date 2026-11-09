@@ -330,10 +330,14 @@ void psp_twsk_init(struct inet_timewait_sock *tw, const struct sock *sk)
 {
 	struct psp_assoc *pas = psp_sk_assoc(sk);
 
-	if (pas)
+	if (pas) {
 		refcount_inc(&pas->refcnt);
+		/* Only for PSP connections: a validator makes the socket
+		 * look like it has an encryption offload of its own
+		 */
+		tw->tw_validate_xmit_skb = psp_validate_xmit;
+	}
 	rcu_assign_pointer(tw->psp_assoc, pas);
-	tw->tw_validate_xmit_skb = psp_validate_xmit;
 }
 
 void psp_twsk_assoc_free(struct inet_timewait_sock *tw)
