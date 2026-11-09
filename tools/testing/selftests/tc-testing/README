@@ -168,6 +168,7 @@ of the command.
 The stages are identified by the following strings:
 
   - pre  (pre-suite)
+  - probe (dependsOn, before setup)
   - setup
   - command
   - verify
