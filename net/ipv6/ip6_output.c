@@ -619,9 +619,12 @@ int ip6_forward(struct sk_buff *skb)
 	/* IPv6 specs say nothing about it, but it is clear that we cannot
 	   send redirects to source routed frames.
 	   We don't send redirects to frames decapsulated from IPsec.
+	   Nor to frames decrypted by the device: the redirect would quote
+	   them in cleartext.
 	 */
 	if (IP6CB(skb)->iif == dev->ifindex &&
-	    opt->srcrt == 0 && !skb_sec_path(skb)) {
+	    opt->srcrt == 0 && !skb_sec_path(skb) &&
+	    !skb_is_decrypted(skb)) {
 		struct in6_addr *target = NULL;
 		struct inet_peer *peer;
 		struct rt6_info *rt;
